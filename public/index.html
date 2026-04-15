@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Milk Dreams · La Lechera</title>
+  <meta name="description" content="La Lechera, proyecto independiente para la Vibe Coding Game Jam 2026.">
+  <meta property="og:title" content="Milk Dreams · La Lechera">
+  <meta property="og:description" content="Una lechera, un cántaro, demasiados sueños y una carrera por no perderlo todo.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://lechera.anto.codes/">
+  <meta property="og:image" content="https://lechera.anto.codes/assets/milk-dreams-cover.jpg">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥛</text></svg>">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap');
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: Inter, system-ui, sans-serif;
+      color: #2f2418;
+      background:
+        radial-gradient(circle at top, rgba(255, 240, 214, 0.9), rgba(245, 231, 211, 0.76) 35%, transparent 60%),
+        linear-gradient(180deg, #eadac1 0%, #d7b78f 48%, #b67b56 100%);
+    }
+    .shell {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 24px 0 56px;
+    }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 28px;
+      font-size: 14px;
+    }
+    .brand, .back {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: #4a3423;
+      text-decoration: none;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.42);
+      backdrop-filter: blur(8px);
+      box-shadow: 0 10px 30px rgba(74, 52, 35, 0.08);
+    }
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
+      gap: 28px;
+      align-items: center;
+      margin-bottom: 28px;
+    }
+    .card {
+      background: rgba(255, 252, 246, 0.74);
+      border: 1px solid rgba(106, 70, 46, 0.12);
+      border-radius: 30px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 24px 80px rgba(69, 40, 21, 0.14);
+    }
+    .copy { padding: 38px; }
+    .eyebrow {
+      display: inline-flex;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(106, 70, 46, 0.08);
+      color: #7f5237;
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+    h1 {
+      margin: 0 0 14px;
+      font-family: Fraunces, serif;
+      font-size: clamp(2.5rem, 6vw, 4.8rem);
+      line-height: 0.95;
+      color: #2d1f14;
+    }
+    .lead {
+      margin: 0 0 20px;
+      font-size: 1.05rem;
+      line-height: 1.7;
+      color: rgba(47, 36, 24, 0.82);
+      max-width: 58ch;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      min-height: 50px;
+      padding: 0 22px;
+      border-radius: 999px;
+      text-decoration: none;
+      font-weight: 700;
+      transition: transform 0.18s ease, box-shadow 0.18s ease;
+    }
+    .button:hover { transform: translateY(-2px); }
+    .button.primary {
+      color: #fffaf2;
+      background: linear-gradient(135deg, #8c4f39, #603622);
+      box-shadow: 0 18px 34px rgba(96, 54, 34, 0.24);
+    }
+    .button.secondary {
+      color: #603622;
+      background: rgba(255,255,255,0.72);
+      border: 1px solid rgba(96, 54, 34, 0.12);
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .stat {
+      padding: 16px;
+      border-radius: 20px;
+      background: rgba(255,255,255,0.48);
+    }
+    .stat strong {
+      display: block;
+      font-size: 1.2rem;
+      margin-bottom: 6px;
+      color: #2d1f14;
+    }
+    .visual {
+      overflow: hidden;
+      min-height: 100%;
+      position: relative;
+    }
+    .visual img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      min-height: 520px;
+    }
+    .visual-badge {
+      position: absolute;
+      left: 18px;
+      bottom: 18px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: rgba(34, 24, 17, 0.7);
+      color: #fff8ec;
+      font-size: 13px;
+      backdrop-filter: blur(8px);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 20px;
+    }
+    .panel { padding: 28px; }
+    .panel h2 {
+      margin: 0 0 12px;
+      font-family: Fraunces, serif;
+      font-size: 2rem;
+    }
+    .panel p, .panel li {
+      line-height: 1.7;
+      color: rgba(47, 36, 24, 0.82);
+    }
+    .panel ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+    .footer {
+      text-align: center;
+      margin-top: 22px;
+      color: rgba(47, 36, 24, 0.7);
+      font-size: 14px;
+    }
+    @media (max-width: 920px) {
+      .hero, .grid { grid-template-columns: 1fr; }
+      .copy { padding: 28px; }
+      .visual img { min-height: 340px; }
+    }
+    @media (max-width: 640px) {
+      .shell { width: min(100% - 20px, 1120px); }
+      .topbar { flex-direction: column; align-items: stretch; }
+      .stats { grid-template-columns: 1fr; }
+      .panel { padding: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <a class="brand" href="/">🥛 <span>Milk Dreams · La Lechera</span></a>
+      <a class="back" href="https://anto.codes/">↩ Volver a anto.codes</a>
+    </div>
+
+    <section class="hero">
+      <div class="card copy">
+        <span class="eyebrow">Vibe Coding Game Jam 2026</span>
+        <h1>La codicia se juega en equilibrio.</h1>
+        <p class="lead">La Lechera ya vive aparte. Este subdominio es ahora su casa: concepto, prototipo y próximas iteraciones del juego, separados del hub general de <strong>anto.codes</strong>.</p>
+        <div class="actions">
+          <a class="button primary" href="/play/">Jugar al prototipo</a>
+          <a class="button secondary" href="https://anto.codes/">Ver el resto de juegos</a>
+        </div>
+        <div class="stats">
+          <div class="stat"><strong>Web + móvil</strong><span>Controles táctiles, teclado y giro.</span></div>
+          <div class="stat"><strong>Una sola idea fuerte</strong><span>Cántaro, equilibrio y tentación.</span></div>
+          <div class="stat"><strong>Repo propio</strong><span>Ahora evoluciona sin ensuciar el hub.</span></div>
+        </div>
+      </div>
+
+      <div class="card visual">
+        <img src="/assets/milk-dreams-cover.jpg" alt="Portada de Milk Dreams, La Lechera">
+        <div class="visual-badge">Prototipo vivo, proyecto separado</div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card panel">
+        <h2>Qué hay aquí</h2>
+        <p>Una base limpia para seguir construyendo La Lechera como proyecto independiente. La idea es que el juego pueda crecer con identidad propia y sin depender del hub principal.</p>
+        <ul>
+          <li>landing simple para enseñar el proyecto,</li>
+          <li>prototipo jugable separado en <code>/play/</code>,</li>
+          <li>despliegue pensado para <code>lechera.anto.codes</code>.</li>
+        </ul>
+      </article>
+
+      <article class="card panel">
+        <h2>Siguiente paso natural</h2>
+        <p>Rehacer el corazón jugable con mejor arquitectura, manteniendo el bucle bueno: avanzar, balancear, decidir si tentar a la suerte y pagar el precio si te pasas.</p>
+        <ul>
+          <li>mejor feel de equilibrio,</li>
+          <li>arte y escena más cohesivos,</li>
+          <li>progresión clara para la jam.</li>
+        </ul>
+      </article>
+    </section>
+
+    <p class="footer">Hecho para crecer aparte, sin mezclarlo más con anto.codes.</p>
+  </div>
+</body>
+</html>
