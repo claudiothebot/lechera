@@ -1,0 +1,155 @@
+import type { Obstacle } from '../game/level';
+
+/**
+ * Player-centric circular radar.
+ *
+ * World layer (obstacles, spawn, goal) rotates with the character so the
+ * "up" direction on screen always matches the Lechera's facing. The
+ * player arrow and the cardinal tick at the top are drawn on top and
+ * never rotate — they are the stable anchor the player reads.
+ *
+ * Everything is pure Canvas 2D. With ~20 obstacles per frame this costs
+ * well under a millisecond; no need for scene graphs or SVG.
+ */
+
+/** Radius in world metres visible from the centre to the edge of the radar. */
+const RADAR_RADIUS_M = 40;
+/** CSS pixel size of the circular canvas (square bounding box). */
+const SIZE = 130;
+/** Inset from the edge where clamped off-screen arrows are drawn. */
+const EDGE_INSET = 8;
+
+export interface MinimapState {
+  playerX: number;
+  playerZ: number;
+  /** Character facing in radians (same convention as player.ts). */
+  facing: number;
+  goal: { x: number; z: number };
+  spawn: { x: number; z: number };
+  obstacles: readonly Obstacle[];
+}
+
+export interface Minimap {
+  render(state: MinimapState): void;
+}
+
+export function createMinimap(canvas: HTMLCanvasElement): Minimap {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Minimap: 2D context unavailable');
+  }
+
+  // Backing store scales with devicePixelRatio; CSS size stays in logical
+  // pixels. After ctx.scale(dpr), we draw in logical pixel units.
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  canvas.width = SIZE * dpr;
+  canvas.height = SIZE * dpr;
+  canvas.style.width = `${SIZE}px`;
+  canvas.style.height = `${SIZE}px`;
+  ctx.scale(dpr, dpr);
+
+  const metresToPx = SIZE / 2 / RADAR_RADIUS_M;
+
+  function render(state: MinimapState) {
+    ctx!.clearRect(0, 0, SIZE, SIZE);
+
+    ctx!.save();
+    ctx!.translate(SIZE / 2, SIZE / 2);
+
+    // --- World layer: rotates with the player ---
+    ctx!.save();
+    // Derivation for `facing - π`:
+    //   Canvas Y = world Z (both "down" in screen space when no rotation).
+    //   Player's forward in world XZ = (sin facing, cos facing).
+    //   We want that direction to land on canvas -Y (up). Solving
+    //   (sin(f − α), cos(f − α)) = (0, −1) → f − α = π → α = f − π.
+    ctx!.rotate(state.facing - Math.PI);
+
+    // Obstacles (axis-aligned boxes). Drawn first so the goal / spawn sit on
+    // top visually, in case the goal happens to land inside a box tint.
+    ctx!.fillStyle = 'rgba(205, 190, 160, 0.55)';
+    for (const ob of state.obstacles) {
+      const dx = (ob.center.x - state.playerX) * metresToPx;
+      const dz = (ob.center.z - state.playerZ) * metresToPx;
+      const w = ob.halfX * 2 * metresToPx;
+      const h = ob.halfZ * 2 * metresToPx;
+      ctx!.fillRect(dx - w / 2, dz - h / 2, w, h);
+    }
+
+    // Spawn: small hollow ring as a "you came from here" anchor.
+    const spawnDx = (state.spawn.x - state.playerX) * metresToPx;
+    const spawnDz = (state.spawn.z - state.playerZ) * metresToPx;
+    ctx!.strokeStyle = 'rgba(247, 244, 236, 0.55)';
+    ctx!.lineWidth = 1.25;
+    ctx!.beginPath();
+    ctx!.arc(spawnDx, spawnDz, 4, 0, Math.PI * 2);
+    ctx!.stroke();
+
+    // Goal: filled dot with a soft halo when in range; clamped arrow at
+    // the radar edge otherwise. The arrow rotation pins its tip to the
+    // outward direction so the player always has a "keep going that way"
+    // hint even when the goal is off-screen.
+    const goalDxWorld = state.goal.x - state.playerX;
+    const goalDzWorld = state.goal.z - state.playerZ;
+    const goalDist = Math.hypot(goalDxWorld, goalDzWorld);
+    const goalDx = goalDxWorld * metresToPx;
+    const goalDz = goalDzWorld * metresToPx;
+    const edgePx = SIZE / 2 - EDGE_INSET;
+
+    if (goalDist <= RADAR_RADIUS_M) {
+      ctx!.fillStyle = 'rgba(241, 210, 141, 0.3)';
+      ctx!.beginPath();
+      ctx!.arc(goalDx, goalDz, 8, 0, Math.PI * 2);
+      ctx!.fill();
+      ctx!.fillStyle = '#f1d28d';
+      ctx!.beginPath();
+      ctx!.arc(goalDx, goalDz, 3.5, 0, Math.PI * 2);
+      ctx!.fill();
+    } else {
+      const mag = Math.hypot(goalDx, goalDz) || 1;
+      const ex = (goalDx / mag) * edgePx;
+      const ez = (goalDz / mag) * edgePx;
+      ctx!.save();
+      ctx!.translate(ex, ez);
+      // Triangle local apex at (0, -6) → we rotate so that apex points
+      // along the outward direction (atan2(ez, ex) + π/2 brings -Y there).
+      ctx!.rotate(Math.atan2(ez, ex) + Math.PI / 2);
+      ctx!.fillStyle = '#f1d28d';
+      ctx!.beginPath();
+      ctx!.moveTo(0, -6);
+      ctx!.lineTo(5, 4);
+      ctx!.lineTo(-5, 4);
+      ctx!.closePath();
+      ctx!.fill();
+      ctx!.restore();
+    }
+
+    ctx!.restore();
+
+    // --- Overlay: screen-fixed ---
+
+    // Cardinal tick at the top reinforces "up = the way the Lechera is facing".
+    ctx!.strokeStyle = 'rgba(241, 210, 141, 0.45)';
+    ctx!.lineWidth = 1.25;
+    ctx!.beginPath();
+    ctx!.moveTo(0, -SIZE / 2 + 3);
+    ctx!.lineTo(0, -SIZE / 2 + 10);
+    ctx!.stroke();
+
+    // Player triangle at the centre, always pointing up.
+    ctx!.fillStyle = '#f7f4ec';
+    ctx!.beginPath();
+    ctx!.moveTo(0, -6);
+    ctx!.lineTo(5, 5);
+    ctx!.lineTo(-5, 5);
+    ctx!.closePath();
+    ctx!.fill();
+    ctx!.strokeStyle = 'rgba(10, 10, 18, 0.75)';
+    ctx!.lineWidth = 1;
+    ctx!.stroke();
+
+    ctx!.restore();
+  }
+
+  return { render };
+}

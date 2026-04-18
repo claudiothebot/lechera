@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Milk Dreams — v0</title>
+    <link rel="stylesheet" href="/src/ui/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="loading-screen" aria-live="polite">Cargando…</div>
+      <canvas id="game"></canvas>
+      <div id="hud">
+        <div id="hud-top-left">
+          <div class="hud-label">SPILL</div>
+          <div id="spill-value" class="hud-value">0%</div>
+          <div class="hud-bar"><div id="spill-bar"></div></div>
+        </div>
+        <div id="hud-top-center">
+          <div class="hud-label">TIEMPO</div>
+          <div id="timer-value" class="hud-value">3:00</div>
+        </div>
+        <div id="hud-top-right">
+          <div class="hud-panel-row">
+            <div>
+              <div class="hud-label">LECHE</div>
+              <div id="litres-value" class="hud-value">1 L</div>
+            </div>
+            <div>
+              <div class="hud-label">SUEÑO</div>
+              <div id="dream-value" class="hud-value hud-value-sm">—</div>
+            </div>
+          </div>
+          <div class="hud-label hud-label-inline">DISTANCIA</div>
+          <div id="distance-value" class="hud-value hud-value-sm">— m</div>
+        </div>
+        <div id="minimap-wrap">
+          <canvas id="minimap"></canvas>
+        </div>
+        <div id="toast"></div>
+        <div id="hud-center">
+          <div id="message"></div>
+          <div id="hint">W/S move — A/D turn — Arrows balance the jug — Hold left mouse to look around — R restart</div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

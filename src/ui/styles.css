@@ -1,0 +1,252 @@
+:root {
+  --fg: #f7f4ec;
+  --fg-dim: rgba(247, 244, 236, 0.65);
+  --accent: #f1d28d;
+  --warn: #f29179;
+  --bg-panel: rgba(10, 10, 18, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #0a0a12;
+  color: var(--fg);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial,
+    sans-serif;
+  overscroll-behavior: none;
+}
+
+#app {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#loading-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0a0a12;
+  color: var(--fg-dim);
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+#loading-screen.hidden {
+  display: none;
+}
+
+#loading-screen.loading-error {
+  color: var(--warn);
+  padding: 0 1.5rem;
+  text-align: center;
+}
+
+#game {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+#hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+#hud-top-left,
+#hud-top-center,
+#hud-top-right {
+  position: absolute;
+  top: 1.25rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-panel);
+  backdrop-filter: blur(6px);
+  border-radius: 0.5rem;
+  min-width: 9rem;
+}
+
+#hud-top-left {
+  left: 1.25rem;
+  /* Wide panel so the balance bar reads as a long horizontal meter. */
+  min-width: 17rem;
+}
+
+#hud-top-center {
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  min-width: 7rem;
+}
+
+#hud-top-right {
+  right: 1.25rem;
+  text-align: right;
+  min-width: 12rem;
+}
+
+/* Circular radar placed under the top-right panel. Height of that panel
+   is ~6rem; start 0.75rem below it so there's breathing room. */
+#minimap-wrap {
+  position: absolute;
+  top: 8.25rem;
+  right: 1.25rem;
+  width: 130px;
+  height: 130px;
+  border-radius: 50%;
+  background: var(--bg-panel);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(247, 244, 236, 0.18);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+
+#minimap {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.hud-panel-row {
+  display: flex;
+  gap: 1.25rem;
+  justify-content: flex-end;
+  margin-bottom: 0.5rem;
+}
+
+.hud-panel-row > div {
+  text-align: right;
+}
+
+.hud-label-inline {
+  margin-top: 0.25rem;
+  margin-bottom: 0.15rem;
+}
+
+.hud-value-sm {
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+#timer-value.low {
+  color: var(--warn);
+}
+
+.hud-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  margin-bottom: 0.25rem;
+}
+
+.hud-value {
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.hud-bar {
+  margin-top: 0.5rem;
+  height: 5px;
+  width: 100%;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+#spill-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: background-color 120ms ease;
+}
+
+#hud-center {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 2.5rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+#message {
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
+  min-height: 2.25rem;
+  line-height: 1.25;
+}
+
+#message .message-sub {
+  font-size: 1rem;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--fg-dim);
+}
+
+#message.win {
+  color: var(--accent);
+}
+
+#message.fail {
+  color: var(--warn);
+}
+
+#toast {
+  position: absolute;
+  top: 6.5rem;
+  left: 50%;
+  transform: translateX(-50%) translateY(-0.5rem);
+  padding: 0.6rem 1.1rem;
+  background: var(--bg-panel);
+  backdrop-filter: blur(8px);
+  border-radius: 0.4rem;
+  font-size: 1.1rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 180ms ease,
+    transform 240ms ease;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+#toast.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+#hint {
+  font-size: 0.8rem;
+  color: var(--fg-dim);
+  letter-spacing: 0.05em;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+}
+
+#hint.hidden {
+  opacity: 0;
+}
