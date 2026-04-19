@@ -73,7 +73,7 @@ lechera/
   vite.config.ts
   public/
     assets/            (provisional cover and future static assets)
-  src/
+  client/
     main.ts
     app/
       bootstrap.ts     (renderer, scene, camera, base tonemapping and fog)
@@ -98,7 +98,7 @@ Systems are factories (`createXxx`) rather than classes so dependencies stay exp
 These should be answered by *playing*, not by theorizing:
 
 - Does the spill meter punish fast steady movement or only bad driving? It should reward flow and punish panic.
-- Are the thresholds for yaw rate and lateral accel feeling right? (See `src/game/spillMeter.ts` constants.)
+- Are the thresholds for yaw rate and lateral accel feeling right? (See `client/game/spillMeter.ts` constants.)
 - Is the obstacle bump impulse too harsh / too lenient?
 - Is the natural leak rate too generous?
 

@@ -3,7 +3,7 @@
  *
  * The client owns the AESTHETIC progression on top of these positions
  * (dream names, reward animals, jug scale, balance multipliers — see
- * `src/game/progression.ts`). The server only cares about the spatial
+ * `client/game/progression.ts`). The server only cares about the spatial
  * + numeric facts: where each goal is, how close you must be to claim
  * it, and how many litres you carry at each step. Putting those facts
  * here makes both sides import from a SINGLE source so reordering or
@@ -29,7 +29,7 @@ export interface Goal2D {
  * via `index % length`. Reordering this array is a BREAKING change
  * because per-index visuals on the client (animal at the goal, dream
  * name) are aligned by index — see `NAMED_DREAMS` and `DREAM_ANIMALS`
- * in `client/src/game/progression.ts`.
+ * in `client/game/progression.ts`.
  */
 export const DREAM_GOALS: ReadonlyArray<Goal2D> = [
   { x: 0, z: -30 },

@@ -4,7 +4,7 @@ import type { Goal2D } from './dreams.js';
  * Spawn point + ring distribution shared between client and server.
  *
  * The client renders a cosmetic marker at the same XZ coordinates
- * (see `client/src/game/level.ts:spawn`). When the room places a new
+ * (see `client/game/level.ts:spawn`). When the room places a new
  * (or reconnecting) player the server picks a random offset inside a
  * disc around this point so 10 lecheras at the same instant don't
  * materialise on a single pixel. The client teleports to the

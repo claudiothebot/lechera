@@ -66,27 +66,31 @@ These don't block Phase 0–2. Park them and revisit when relevant:
 
 ```
 lechera/
-  client/                  ← rename of current `lechera/` content
+  client/                  ← single-player + Colyseus client (formerly `src/`)
+    main.ts
+    net/                   ← Colyseus client, remote-player render
+    ui/
+    game/
+    ...
+  server/                  ← Colyseus server (workspace package)
     src/
-      ...                  ← existing single-player game
-      net/                 ← new: Colyseus client, remote-player render
-  server/                  ← new
-    src/
-      index.ts             ← Colyseus boot
+      index.ts             ← Colyseus boot + GET /leaderboard
       rooms/
         MilkDreamsRoom.ts  ← single room schema + lifecycle
       persistence/
         supabase.ts        ← write rankings on round end
     package.json
-  shared/                  ← new
-    types.ts               ← messages, schemas shared between client/server
-  pnpm-workspace.yaml      ← new
+  shared/                  ← workspace package `@milk-dreams/shared`
+    src/                   ← dreams catalog, spawn, name validation, leaderboard types
+    package.json
+  pnpm-workspace.yaml
   MULTIPLAYER.md           ← this doc
   AGENTS.md
 ```
 
-We can postpone the client/ rename until Phase 1 if it's noisy. The
-exact layout will solidify in Phase 0 → Phase 1.
+The `src/ → client/` rename landed alongside the shared package so the three
+sources (client, server, shared) sit next to each other. See "Repo layout
+(current)" below for the up-to-date file-level breakdown.
 
 ## Roadmap
 
@@ -178,7 +182,7 @@ Phase 2 ships in two passes so we can validate the network plumbing before the v
 - [x] Server module `server/src/persistence/supabase.ts`: factory + lazy module-level singleton (`getLeaderboardStore()`). Reads `SUPABASE_URL` + `SUPABASE_ANON_KEY` from `process.env`; **falls back to a no-op store** when either is missing so local dev / CI runs unchanged. All Supabase calls are try/catch-wrapped — a transient outage logs a warning and returns `void` / `[]` instead of crashing the room.
 - [x] `MilkDreamsRoom.endRound()` now snapshots contributions BEFORE flipping the phase, then `await`s `recordRoundContributions(...)`, THEN flips to `'scoreboard'`. Order matters: clients fetch `/leaderboard` the moment they observe the phase change, so persisting first eliminates a client-visible race. The await adds Supabase RTT (~50–200 ms) to the transition — invisible in practice, and bounded by the dotenv-controlled timeout.
 - [x] Express route `GET /leaderboard?limit=N` (in `server/src/index.ts`): wildcard CORS (it's read-only public data), `Cache-Control: no-store`, returns `{ entries: [...] }`. Client never talks to Supabase directly — keeps anon key + URL out of the shipped JS bundle and lets the server be the single chokepoint for any future rate-limiting / sanitisation.
-- [x] Client module `src/net/leaderboard.ts`: `httpEndpointFromWs(ws)` derives the HTTP origin from the existing WS endpoint (no second config knob). `fetchLeaderboard(http, limit, timeoutMs=2500)` returns `[]` on any error so the HUD can render a clean "no data yet" placeholder instead of a spinner.
+- [x] Client module `client/net/leaderboard.ts`: `httpEndpointFromWs(ws)` derives the HTTP origin from the existing WS endpoint (no second config knob). `fetchLeaderboard(http, limit, timeoutMs=2500)` returns `[]` on any error so the HUD can render a clean "no data yet" placeholder instead of a spinner.
 - [x] HUD scoreboard panel ships an additional **"All-time Top 10"** section (`#leaderboard-section` in `index.html`, `.scoreboard__section*` styles). Renders `null` as "Loading…", `[]` as "No rounds played yet.", and otherwise lists name + `total_milk L`, with a `(you)` tag on rows whose name matches the local player. The local-round scoreboard above stays untouched.
 - [x] `MultiplayerHandle.endpoint()` exposes the resolved WS URL so `main.ts` can derive the matching HTTP origin once and stash it; refresh fires from the same `subscribeRound` branch that opens the scoreboard overlay.
 - [x] Env wiring: `dotenv/config` imported at the top of `server/src/index.ts` so a local `.env` is picked up automatically. `.env.example` documents the two required variables and the "Exposed schemas" gotcha. `.env` and `.env.local` are gitignored.
@@ -212,10 +216,10 @@ To keep momentum and avoid creep:
 
 **Phase 6 done.** Multiplayer is now feature-complete for a casual party session of ~10 lecheras:
 
-- **Mandatory name + modal** (`src/ui/nameModal.ts` + `index.html#name-modal`): on first boot a small modal blocks the screen and asks for a display name (min 3 / max 18 chars after sanitisation). The submit button stays disabled until live validation (the SAME `sanitiseName` from `@milk-dreams/shared` the server uses) accepts the input, and a small inline error explains the rule once the user has typed something. Once accepted, the name is cached in `localStorage` under `lechera.name`; subsequent loads skip the modal entirely. The chosen name is forwarded to `joinOrCreate('milk-dreams', { name })`; the server re-runs `sanitiseName` and **rejects the join** if the result fails — there is no auto-name fallback any more. Players can clear `localStorage.lechera.name` from devtools to re-prompt on next load.
+- **Mandatory name + modal** (`client/ui/nameModal.ts` + `index.html#name-modal`): on first boot a small modal blocks the screen and asks for a display name (min 3 / max 18 chars after sanitisation). The submit button stays disabled until live validation (the SAME `sanitiseName` from `@milk-dreams/shared` the server uses) accepts the input, and a small inline error explains the rule once the user has typed something. Once accepted, the name is cached in `localStorage` under `lechera.name`; subsequent loads skip the modal entirely. The chosen name is forwarded to `joinOrCreate('milk-dreams', { name })`; the server re-runs `sanitiseName` and **rejects the join** if the result fails — there is no auto-name fallback any more. Players can clear `localStorage.lechera.name` from devtools to re-prompt on next load.
 - **Spawn ring** (`shared/src/spawn.ts:spawnPositionInRing` + the cosmetic marker in `level.ts`): the server picks an area-uniform random point in an annulus `[0.5 m, 2.6 m]` around the world spawn `(0, 20)` for every joining or reconnecting player. Sampling `r = sqrt(lerp(r₁², r₂²))` keeps the distribution flat over the annulus area (no inner-edge bias). The painted spawn marker on the ground was widened from a thin 1.5 m ring to a thin 3.0 m ring so the visual matches the spawn budget — with 10 lecheras × π·PLAYER_RADIUS² ≈ 6.4 m² of footprint inside ≈ 20.4 m² of annulus the density sits around 31 % (tight but never pile-up). Two players landing within `2 × PLAYER_RADIUS` is fine: the Phase 6d player-player collision separates them on the next frame. Sizing history: the first iteration used `[1.0, 3.0]` (lecheras spawned outside the 1.5 m marker), then `[0.3, 1.2]` (fit inside the marker but mathematically too cramped for ~10 players), now `[0.5, 2.6]` paired with the wider marker. The client teleports to the server-picked position the first time the self schema hydrates (`player.reset(new Vector3(self.x, 0, self.z))`); subsequent server pose echoes are ignored so client-predictive movement isn't fought.
 - **Reconnect by name** (`MilkDreamsRoom.recentlyLeftByName`): when a player leaves with `litresDelivered > 0` during the playing phase, their score is cached at MODULE scope (NOT per-room — Colyseus disposes the room when the last player leaves, which is precisely the canonical reconnect scenario). A new join under the same sanitised name within `RECONNECT_TTL_MS = 30 s` restores `litresDelivered`; `dreamIndex` / `litres` are NOT restored so the reconnecting player respawns on the small jug at the first goal (a fragile late-game jug right after a refresh would feel terrible). Different names start at 0 (no cross-name leak). TTL eviction is a lazy O(n) sweep on every leave — no leaked timer under `tsx watch`.
-- **Player ↔ player collision** (`src/main.ts` per-frame `frameObstacles`): each frame we wrap every remote in a pre-pooled `Obstacle` AABB sized at `PLAYER_RADIUS`, concatenate with `level.obstacles`, and pass into the existing `player.update(...)` collision path. This gives lecheras a `2 × PLAYER_RADIUS = 0.9 m` collision diameter, produces `bumps` events that flow naturally through `jugBalance.bumps` (so a bodycheck tilts your jug exactly like banging into a wall), and costs essentially nothing per frame (~10 remotes × handful of field assignments). Each client resolves collision against the others on its own local sim, so the apparent push is roughly symmetric without server mediation.
+- **Player ↔ player collision** (`client/main.ts` per-frame `frameObstacles`): each frame we wrap every remote in a pre-pooled `Obstacle` AABB sized at `PLAYER_RADIUS`, concatenate with `level.obstacles`, and pass into the existing `player.update(...)` collision path. This gives lecheras a `2 × PLAYER_RADIUS = 0.9 m` collision diameter, produces `bumps` events that flow naturally through `jugBalance.bumps` (so a bodycheck tilts your jug exactly like banging into a wall), and costs essentially nothing per frame (~10 remotes × handful of field assignments). Each client resolves collision against the others on its own local sim, so the apparent push is roughly symmetric without server mediation.
 
 The full multiplayer roadmap (Phase 0–6) is now closed. The shared workspace package landed alongside the mandatory-name change (Phase 6 polish), so the only deferred infra item is picking a server hosting target (Fly / Railway / VPS).
 
@@ -236,21 +240,22 @@ Then open the game in the browser. A modal asks for your display name (min 3 cha
 
 ### Repo layout (current)
 
-Phase 0/1 went in without renaming the existing `src/` to `client/src/` to avoid noise. The structure today is:
+The original single-player `src/` was renamed to `client/` once the workspace gained `shared/` and `server/` siblings, so the three sources sit next to each other (root package.json still IS the client). Vite root is unchanged (the package directory); `tsconfig.json` includes `client/`, and `index.html` loads `/client/main.ts` + `/client/ui/styles.css`.
 
 ```
 lechera/
   pnpm-workspace.yaml         ← lists `shared` and `server` as workspaces; root is the client package
   package.json                ← workspace root + client package; depends on `@milk-dreams/shared: workspace:*`
-    src/
-      net/
-        multiplayer.ts          ← client connector, 20 Hz pose throttle, fallback, remote-player subscription via getStateCallbacks; mandatory `name` (validated with shared `sanitiseName`) forwarded to joinOrCreate (Phase 6a)
-        remotePlayers.ts        ← spawns / updates / disposes one avatar per remote, snapshot interpolation, name-tag sprites
-        leaderboard.ts          ← client-side fetch for the all-time leaderboard (Phase 5); re-exports the shared `LeaderboardEntry` type
-      ui/
-        minimap.ts              ← now also renders remote players as colored dots
-        nameModal.ts            ← Phase 6a: blocks on first boot until the player enters a valid name (min 3 chars), cached in localStorage. Validation comes from `@milk-dreams/shared:isValidName/sanitiseName`
-      main.ts                   ← wires connect → manager → per-frame update; teleports to server-picked spawn (Phase 6b); concatenates remote-player AABBs into the per-frame obstacle list (Phase 6d)
+  index.html                  ← Vite entry; loads `/client/main.ts` and `/client/ui/styles.css`
+  client/                     ← client source (formerly `src/`)
+    net/
+      multiplayer.ts          ← client connector, 20 Hz pose throttle, fallback, remote-player subscription via getStateCallbacks; mandatory `name` (validated with shared `sanitiseName`) forwarded to joinOrCreate (Phase 6a)
+      remotePlayers.ts        ← spawns / updates / disposes one avatar per remote, snapshot interpolation, name-tag sprites
+      leaderboard.ts          ← client-side fetch for the all-time leaderboard (Phase 5); re-exports the shared `LeaderboardEntry` type
+    ui/
+      minimap.ts              ← now also renders remote players as colored dots
+      nameModal.ts            ← Phase 6a: blocks on first boot until the player enters a valid name (min 3 chars), cached in localStorage. Validation comes from `@milk-dreams/shared:isValidName/sanitiseName`
+    main.ts                   ← wires connect → manager → per-frame update; teleports to server-picked spawn (Phase 6b); concatenates remote-player AABBs into the per-frame obstacle list (Phase 6d)
   shared/                     ← workspace package "@milk-dreams/shared", source of truth for everything that must agree across both sides
     package.json              ← compiles to `dist/`; client/server depend via `workspace:*`
     tsconfig.json
