@@ -1,7 +1,14 @@
 import * as THREE from 'three';
 import type { Obstacle } from './level';
 
-const PLAYER_RADIUS = 0.45;
+/**
+ * Half-width of the cylindrical body used for collision against world
+ * obstacles. Exported because Phase 6d (player ↔ player collision)
+ * wraps remote players as `Obstacle` AABBs sized at this radius so the
+ * collision diameter between two lecheras equals 2 × PLAYER_RADIUS,
+ * matching their visual footprint.
+ */
+export const PLAYER_RADIUS = 0.45;
 const MAX_SPEED = 4.5;
 /** Backward speed cap (S key). Lower than forward = classic tank convention. */
 const MAX_BACK_SPEED = 2.5;

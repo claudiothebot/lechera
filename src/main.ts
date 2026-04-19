@@ -3,7 +3,7 @@ import { createBootstrap } from './app/bootstrap';
 import { createResize } from './app/resize';
 import { createInputSystem } from './systems/input';
 import { createLevel, loadLevelHouses, loadLevelTextures } from './game/level';
-import { createPlayer } from './game/player';
+import { createPlayer, PLAYER_RADIUS } from './game/player';
 import { createJugBalance, type BumpInput } from './game/jugBalance';
 import {
   createCharacterInstance,
@@ -17,6 +17,13 @@ import {
   type JugSource,
 } from './game/jugModel';
 import { loadLevelAnimals, type LevelAnimals } from './game/levelAnimals';
+import { loadBillboardModel } from './game/billboardModel';
+import {
+  buildBillboardCollisionObstacles,
+  createTweetBillboards,
+  type TweetBillboardPlacement,
+} from './game/tweetBillboards';
+import { EXAMPLE_TWEETS } from './game/exampleTweets';
 import { createProgression } from './game/progression';
 import { createCameraRig } from './render/cameraRig';
 import { installHdriSky } from './render/sky';
@@ -30,9 +37,16 @@ import {
   type MultiplayerHandle,
 } from './net/multiplayer';
 import { createRemotePlayers, type RemotePlayersManager } from './net/remotePlayers';
-import type { ScoreboardEntry } from './ui/hud';
+import {
+  fetchLeaderboard,
+  httpEndpointFromWs,
+  type LeaderboardEntry,
+} from './net/leaderboard';
+import type { AllTimeEntry, ScoreboardEntry } from './ui/hud';
+import { getOrAskPlayerName } from './ui/nameModal';
+import type { Obstacle } from './game/level';
 
-/** Cántaro: tamaño base en metros y elevación extra sobre el punto de cabeza. */
+/** Jug: base height in metres and extra lift above the head anchor. */
 const JUG_TARGET_HEIGHT = 0.42;
 const JUG_EXTRA_LIFT_Y = 0.08;
 
@@ -44,6 +58,35 @@ const TOTAL_TIME_SECONDS = 180;
  * Set to `true` while tuning levels or rushing to late dreams.
  */
 const DEBUG_INVINCIBLE = true;
+
+function dreamAdvanceToast(obtained: string, nextName: string): string {
+  return `You got ${obtained.toLowerCase()}! Now you dream of ${nextName.toLowerCase()}.`;
+}
+
+/**
+ * Phase 4.5 — toast shown when a soft-spill resets the dream chain
+ * mid-round (online only). Mirrors the SP "you spilled the milk" text
+ * but framed as a continuation, not a game over.
+ */
+const SPILL_TOAST_TEXT =
+  'You spilled the milk! Starting over with the small jar.';
+
+/**
+ * Cumulative litres delivered for a 0-based dream index reached by
+ * a clean (no-spill) chain in single-player. Triangular sum of the
+ * `litres = i + 1` series from the dreams catalog: 1 + 2 + ... + n =
+ * n(n+1)/2 where n is the number of completed deliveries.
+ *
+ * Used as a fallback for SP and as the HUD seed before the server's
+ * `litresDelivered` snapshot lands. In MP the canonical value is the
+ * server's monotonically-tracked `litresDelivered` (which can diverge
+ * from this formula when soft-spills are involved — that's the whole
+ * point: spilling preserves the bank).
+ */
+function triangularLitresFor(index: number): number {
+  const n = Math.max(0, Math.floor(index));
+  return (n * (n + 1)) / 2;
+}
 
 /**
  * Yaw → lateral-accel gain for the jug (m/s² per rad/s).
@@ -61,6 +104,97 @@ const DEBUG_INVINCIBLE = true;
  * careless pivots a reliable way to spill.
  */
 const YAW_INERTIA_GAIN = 15.0;
+
+/** Playtest: fewer billboards until tweet planes are optimized / instanced. */
+const BILLBOARD_TWEET_COUNT = 10;
+
+/**
+ * Min centre distance in XZ between boards (~footprint + margin) so they
+ * never spawn stacked.
+ */
+const BILLBOARD_MIN_SPACING_M = 12;
+
+/** Deterministic 0..1 “noise” so scatter looks irregular but stable across reloads. */
+function billboardHash01(i: number, salt: number): number {
+  const t = Math.sin(i * 12.9898 + salt * 78.233 + BILLBOARD_TWEET_COUNT) * 43758.5453;
+  return t - Math.floor(t);
+}
+
+/**
+ * Tweet boards scattered off the path with **non-overlap**: each new spot
+ * must clear `BILLBOARD_MIN_SPACING_M` from all previous (greedy + retries).
+ * Still a bit irregular via hash jitter; fallback ladder if retries exhaust.
+ */
+function buildExampleTweetPlacements(): TweetBillboardPlacement[] {
+  const picks = EXAMPLE_TWEETS.slice(0, BILLBOARD_TWEET_COUNT);
+  const placed: THREE.Vector3[] = [];
+  const minSq = BILLBOARD_MIN_SPACING_M * BILLBOARD_MIN_SPACING_M;
+  const out: TweetBillboardPlacement[] = [];
+
+  for (let i = 0; i < picks.length; i++) {
+    const tweet = picks[i]!;
+    const pos = new THREE.Vector3();
+    let accepted = false;
+
+    for (let attempt = 0; attempt < 96; attempt++) {
+      const seed = i * 997 + attempt * 131;
+      const r0 = billboardHash01(seed, 0);
+      const r1 = billboardHash01(seed, 1);
+      const r2 = billboardHash01(seed, 2);
+      const side = r0 < 0.5 ? -1 : 1;
+      const x =
+        side * (8.5 + r1 * 10.5) + (billboardHash01(seed, 4) - 0.5) * 4.5;
+      const z =
+        18 -
+        i * 6.5 -
+        attempt * 0.035 +
+        (r2 - 0.5) * 4.5 +
+        Math.sin(seed * 0.061) * 3;
+
+      pos.set(
+        THREE.MathUtils.clamp(x, -42, 42),
+        0,
+        THREE.MathUtils.clamp(z, -40, 24),
+      );
+
+      if (placed.every((p) => pos.distanceToSquared(p) >= minSq)) {
+        placed.push(pos.clone());
+        accepted = true;
+        break;
+      }
+    }
+
+    if (!accepted) {
+      const side = i % 2 === 0 ? -1 : 1;
+      pos.set(side * 12.5, 0, 16 - i * 7.5);
+      let guard = 0;
+      while (
+        guard < 30 &&
+        placed.some((p) => pos.distanceToSquared(p) < minSq)
+      ) {
+        guard += 1;
+        pos.z -= 2.8;
+        pos.x += (billboardHash01(i + guard, 9) - 0.5) * 2;
+      }
+      if (placed.some((p) => pos.distanceToSquared(p) < minSq)) {
+        pos.z -= 18 + i * 2.5;
+      }
+      placed.push(pos.clone());
+    }
+
+    const sideFromX = pos.x < 0 ? -1 : 1;
+    const baseYaw = sideFromX < 0 ? 0 : Math.PI;
+    const yawJitter = (billboardHash01(i, 7) - 0.5) * 0.55;
+    const ang = baseYaw + yawJitter;
+    out.push({
+      position: pos.clone(),
+      facing: new THREE.Vector3(Math.cos(ang), 0, Math.sin(ang)),
+      tweet,
+    });
+  }
+
+  return out;
+}
 
 async function boot() {
   const canvas = document.querySelector<HTMLCanvasElement>('#game');
@@ -154,10 +288,10 @@ async function boot() {
     player.setVisual(character.root);
     player.setJugVisual(jugRoot);
   } catch (err) {
-    console.error('[assets] failed to load Lechera / cántaro GLB', err);
+    console.error('[assets] failed to load milkmaid / jug GLB', err);
     if (loadingEl) {
       loadingEl.textContent =
-        'No se pudieron cargar los modelos. Comprueba la red y recarga.';
+        'Failed to load assets. Check your connection and reload.';
       loadingEl.classList.add('loading-error');
     }
     return;
@@ -167,7 +301,7 @@ async function boot() {
 
   if (DEBUG_INVINCIBLE) {
     queueMicrotask(() => {
-      console.warn('[debug] DEBUG_INVINCIBLE: no fallo por derrame el cántaro');
+      console.warn('[debug] DEBUG_INVINCIBLE: spills do not fail the run');
     });
   }
 
@@ -185,11 +319,67 @@ async function boot() {
       console.error('[animals] failed to load reward animals', err);
     });
 
+  // Roadside tweet-billboards (POC). Loaded async in the background so slow
+  // fetches never block gameplay. Stubs live here for the POC; swap for a
+  // real endpoint by replacing the array with a fetch result.
+  loadBillboardModel()
+    .then((billboardModel) => {
+      const placements = buildExampleTweetPlacements();
+      level.addObstacles(buildBillboardCollisionObstacles(billboardModel, placements));
+      createTweetBillboards({
+        scene,
+        camera,
+        renderer,
+        billboard: billboardModel,
+        placements,
+      });
+    })
+    .catch((err) => {
+      console.error('[billboards] failed to load billboard model', err);
+    });
+
   const tiltAxis = new THREE.Vector3();
   const jugWorldPos = new THREE.Vector3();
 
   let status: GameStatus = 'playing';
   let timeRemaining = TOTAL_TIME_SECONDS;
+  /** Offline / pre-hydration round label; online uses `multi.round().roundNumber`. */
+  let localRoundCounter = 1;
+
+  // Multiplayer state must be declared BEFORE `applyCurrentDream` /
+  // `currentLitresDelivered` — those close over these `let` bindings. If
+  // they sit below in the source, the first `applyCurrentDream` during
+  // boot hits the temporal dead zone and throws
+  // "Cannot access 'serverProgressionLive' before initialization".
+  let multi: MultiplayerHandle = OFFLINE_MULTIPLAYER_HANDLE;
+  let remotePlayers: RemotePlayersManager | null = null;
+  let serverProgressionLive = false;
+  /**
+   * Phase 6d — scratch buffer reused every frame to feed the
+   * concatenated `[level obstacles, remote players as obstacles]`
+   * list into `player.update`. Pre-allocated so we don't churn GC at
+   * 60 Hz with N rebuilt array literals.
+   */
+  const frameObstacles: Obstacle[] = [];
+  /**
+   * Phase 6d — pre-allocated `Obstacle` shells reused for remote
+   * players. We only mutate `center.x` / `center.z` per frame; halfX,
+   * halfZ, halfY and `visual` stay constant. This keeps the per-frame
+   * cost of remote-player collision to a few field assignments per
+   * remote, not an allocation.
+   */
+  const remoteObstaclePool: Obstacle[] = [];
+  /**
+   * Reusable invisible group used as the `visual` field of pooled
+   * remote-player obstacles. The collision math in `player.ts` only
+   * reads `center` / `halfX` / `halfZ`, so the visual is a formality
+   * required by the `Obstacle` interface; sharing one group avoids N
+   * dummy allocations.
+   */
+  const remoteObstacleVisual = new THREE.Group();
+  remoteObstacleVisual.name = 'remote-obstacle-shell';
+  let serverRoundLive = false;
+  let lastServerPhase: 'playing' | 'scoreboard' | null = null;
 
   /**
    * Push the current dream (from `progression`) into every system that cares:
@@ -227,9 +417,24 @@ async function boot() {
       level.goalAnchor.add(levelAnimals.get(d.animalKey));
     }
 
-    hud.setMilkStats(d.litres, d.index);
+    hud.setMilkStats(d.litres, currentLitresDelivered());
     hud.setDreamLabel(d.dreamName);
     dreamPreview.setKey(d.animalKey, levelAnimals);
+  }
+
+  /**
+   * Cumulative litres delivered this round (Phase 4.5). Online: the
+   * server-tracked `litresDelivered` from the self schema (preserved
+   * across soft-spills). Offline: derived from the local progression
+   * via the triangular sum, since SP keeps the classic "spill = game
+   * over" model and cannot accumulate beyond a clean chain.
+   */
+  function currentLitresDelivered(): number {
+    if (serverProgressionLive) {
+      const snap = multi.selfProgression();
+      if (snap) return snap.litresDelivered;
+    }
+    return triangularLitresFor(progression.current.index);
   }
 
   function restart() {
@@ -244,14 +449,18 @@ async function boot() {
     // locally would desync the HUD until the next schema patch lands.
     // In offline mode we still need to rewind it ourselves.
     if (!serverProgressionLive) progression.reset();
+    if (!serverRoundLive) localRoundCounter += 1;
     applyCurrentDream(false);
     hud.setStatus(status);
     hud.setTime(timeRemaining);
+    const rv = serverRoundLive ? multi.round() : null;
+    hud.setRound(rv?.roundNumber ?? localRoundCounter);
   }
 
   applyCurrentDream(false);
   hud.setStatus(status);
   hud.setTime(timeRemaining);
+  hud.setRound(localRoundCounter);
 
   const clock = new THREE.Clock();
 
@@ -263,41 +472,36 @@ async function boot() {
   // afterward, every frame's `sendPose` lands on the real connection,
   // `remotePlayers` starts spawning visuals for other players, and
   // delivery validation moves to the server.
-  let multi: MultiplayerHandle = OFFLINE_MULTIPLAYER_HANDLE;
-  let remotePlayers: RemotePlayersManager | null = null;
-  /**
-   * Phase 3 — connection state for the progression source of truth.
-   *  - `false` (default): no server. Local progression decides everything.
-   *  - `true`:            server-authoritative. Local advance() is never
-   *    called from inside the goal-radius branch; we send `claim_delivery`
-   *    instead and react to the schema callback that bumps `dreamIndex`.
-   *
-   * We flip on the first self-progression event so we don't enter the
-   * online branch while the schema is still hydrating (would briefly
-   * stop sending claims with no replacement source).
-   */
-  let serverProgressionLive = false;
-  /**
-   * Phase 4 — server-driven round lifecycle. While `false`, the local
-   * `timeRemaining` timer ticks down as in single-player and the local
-   * 'timeout' game-over fires when it reaches zero. While `true`, the
-   * timer is read from `multi.round()` and the 'timeout' branch is
-   * skipped — the server's phase transition (playing → scoreboard →
-   * playing) drives everything instead.
-   */
-  let serverRoundLive = false;
-  /**
-   * Last server phase we acted on. `null` until the first round update
-   * arrives. We compare against the incoming phase to detect transitions
-   * (the only events that need side-effects: showing/hiding scoreboard,
-   * resetting the local sim).
-   */
-  let lastServerPhase: 'playing' | 'scoreboard' | null = null;
   hud.setNetStatus('connecting', null);
 
   /**
+   * Phase 5 — derive the HTTP base URL for `/leaderboard` from the
+   * Colyseus WebSocket endpoint. Captured once when the handle resolves
+   * so we don't re-parse `window.location.search` every refresh.
+   */
+  let leaderboardHttpEndpoint: string | null = null;
+
+  /**
+   * Phase 5 — refresh the All-time Top 10 panel inside the open
+   * scoreboard. Returns immediately if no HTTP endpoint is known
+   * (offline / pre-connect), so the caller can wire it unconditionally
+   * to the round-transition handler. Errors are swallowed inside
+   * `fetchLeaderboard` (returns `[]` on failure).
+   */
+  async function refreshLeaderboard(handle: MultiplayerHandle): Promise<void> {
+    if (!leaderboardHttpEndpoint) return;
+    const entries = await fetchLeaderboard(leaderboardHttpEndpoint, 10);
+    const mapped: AllTimeEntry[] = entries.map((e: LeaderboardEntry) => ({
+      name: e.name,
+      totalMilk: e.total_milk,
+      roundsPlayed: e.rounds_played,
+    }));
+    hud.setAllTimeLeaderboard(mapped, handle.selfName());
+  }
+
+  /**
    * Build the scoreboard entries for the current frame. Sorted by
-   * `dreamIndex` desc; ties broken by name for stable rendering.
+   * `litresDelivered` desc; ties broken by name for stable rendering.
    * Capped at the top 8 to keep the panel readable on small screens.
    */
   function buildScoreboard(handle: MultiplayerHandle): ScoreboardEntry[] {
@@ -306,7 +510,7 @@ async function boot() {
     if (self) {
       entries.push({
         name: self.name,
-        deliveries: self.dreamIndex,
+        litresDelivered: self.litresDelivered,
         colorHue: self.colorHue,
         isSelf: true,
       });
@@ -314,24 +518,66 @@ async function boot() {
     handle.remotePlayers().forEach((view) => {
       entries.push({
         name: view.name,
-        deliveries: view.dreamIndex,
+        litresDelivered: view.litresDelivered,
         colorHue: view.colorHue,
         isSelf: false,
       });
     });
     entries.sort((a, b) => {
-      if (b.deliveries !== a.deliveries) return b.deliveries - a.deliveries;
+      if (b.litresDelivered !== a.litresDelivered) {
+        return b.litresDelivered - a.litresDelivered;
+      }
       return a.name.localeCompare(b.name);
     });
     return entries.slice(0, 8);
   }
-  void connectMultiplayer({
-    onStatusChange: (status, name) => {
-      hud.setNetStatus(status, name);
-    },
-  }).then((handle) => {
+  // Phase 6a — resolve the player's display name BEFORE opening the
+  // WebSocket. The cached path (`localStorage` hit) is synchronous and
+  // adds zero latency to first connect; the modal path blocks here
+  // until the player enters a valid name (mandatory, min 3 chars).
+  // The server uses the SAME validation, so any name accepted here is
+  // accepted there.
+  void getOrAskPlayerName().then((chosenName) =>
+    connectMultiplayer({
+      name: chosenName,
+      onStatusChange: (status, name) => {
+        hud.setNetStatus(status, name);
+      },
+    }),
+  ).then((handle) => {
     multi = handle;
     hud.setNetStatus(handle.status(), handle.selfName());
+    // Phase 5 — capture the HTTP origin sibling of the WS endpoint so
+    // `refreshLeaderboard` knows where to fetch the all-time top from.
+    // We always set it (even when offline) because a future reconnect
+    // would still target the same origin.
+    const ws = handle.endpoint();
+    if (ws) leaderboardHttpEndpoint = httpEndpointFromWs(ws);
+    // Phase 6b — server picks a spawn position inside an annulus
+    // around the world spawn (avoids 10 lecheras stacking on top of
+    // each other). Teleport the local character to that position the
+    // first time the schema hydrates with our pose. Subsequent self
+    // updates (pose echoes from our own `pose` sends) are ignored —
+    // we don't want server-side pose to fight the client-predictive
+    // movement model.
+    if (handle.status() === 'online') {
+      let teleportedToServerSpawn = false;
+      const tryTeleport = () => {
+        if (teleportedToServerSpawn) return;
+        const self = handle.selfView();
+        if (!self) return;
+        teleportedToServerSpawn = true;
+        // `self.x` / `self.z` come from `spawnPositionInRing()` on
+        // the server. Y stays 0 — the player module clamps it.
+        player.reset(new THREE.Vector3(self.x, 0, self.z));
+      };
+      // Self may already be in the schema by the time our `then`
+      // runs; otherwise the next progression fire will land it.
+      tryTeleport();
+      handle.subscribeSelfProgression({
+        onChange: () => tryTeleport(),
+      });
+    }
     // Wire remote-player rendering. Safe to do unconditionally — the
     // manager subscribes through the handle, so an offline handle just
     // means "no remotes will ever appear" without throwing. Sources
@@ -367,9 +613,16 @@ async function boot() {
         // accepted delivery). The pose echo will fire onChange on
         // every patch but with the same dreamIndex; cheap to filter.
         if (snapshot.dreamIndex === progression.current.index) return;
-        // Special case: the server resets `dreamIndex` to 0 at the
-        // start of each round. That's not a "delivery", so skip the
-        // toast — the round-transition branch handles its own UX.
+        // Special case: the server resets `dreamIndex` to 0 in two
+        // situations:
+        //   1) Round transition `scoreboard → playing` (Phase 4) —
+        //      the round-overlay branch already handled the UX.
+        //   2) Soft-spill ack (Phase 4.5) — the spill branch in the
+        //      main loop already showed `SPILL_TOAST_TEXT` locally.
+        // Either way we just rebuild visuals silently here. The
+        // schema's `litresDelivered` is the authoritative running
+        // total, so `applyCurrentDream` picking it up via
+        // `currentLitresDelivered` keeps the HUD in sync.
         if (snapshot.dreamIndex === 0) {
           progression.setIndex(0);
           applyCurrentDream(false);
@@ -379,10 +632,7 @@ async function boot() {
         progression.setIndex(snapshot.dreamIndex);
         applyCurrentDream(true);
         const nextName = progression.current.dreamName;
-        hud.showToast(
-          `¡Has conseguido ${obtained.toLowerCase()}! Ahora sueñas con ${nextName.toLowerCase()}`,
-          2200,
-        );
+        hud.showToast(dreamAdvanceToast(obtained, nextName), 2200);
       },
     });
 
@@ -413,6 +663,15 @@ async function boot() {
             (snapshot.phaseEndsAtMs - performance.now()) / 1000,
           );
           hud.showScoreboard(entries, remainingSec);
+          // Phase 5 — kick off the all-time leaderboard fetch in the
+          // background. The HUD shows a "Loading…" placeholder until
+          // it lands; the await resolves to `[]` on any error so we
+          // either render real data or "no data yet". The server's
+          // INSERT for THIS round runs synchronously inside endRound
+          // before the `phase` schema patch reaches us, so the fetch
+          // includes the just-finished round's contributions.
+          hud.setAllTimeLeaderboard(null, handle.selfName());
+          void refreshLeaderboard(handle);
         } else {
           // Transitioned (back) into a playing phase — also covers the
           // initial connect snapshot when we're already mid-round.
@@ -457,6 +716,8 @@ async function boot() {
       }
     }
 
+    hud.setRound(round ? round.roundNumber : localRoundCounter);
+
     if (status === 'playing') {
       if (!round) {
         // Single-player / pre-hydration path.
@@ -464,11 +725,47 @@ async function boot() {
         hud.setTime(timeRemaining);
       }
 
+      // Phase 6d — player ↔ player collision. Wrap every remote
+      // player as an `Obstacle` AABB sized at PLAYER_RADIUS so the
+      // collision diameter between two lecheras equals 2·PLAYER_RADIUS,
+      // matching their visual footprint. Using AABBs (rather than a
+      // dedicated circle path) lets us reuse the existing collision
+      // code in `player.ts` unchanged — and it produces `bumps` events
+      // that flow naturally into the jug balance, so a clash with
+      // another lechera tilts your jug exactly like clashing with a
+      // wall would.
+      //
+      // Each client resolves collision against the OTHER players
+      // independently on its own local sim, so the apparent push is
+      // roughly symmetric without the server having to mediate.
+      // Cheap to do every frame: ~10 remotes × a handful of field
+      // assignments.
+      frameObstacles.length = 0;
+      for (const ob of level.obstacles) frameObstacles.push(ob);
+      const remotes = multi.remotePlayers();
+      let remoteIdx = 0;
+      remotes.forEach((view) => {
+        let entry = remoteObstaclePool[remoteIdx];
+        if (!entry) {
+          entry = {
+            center: new THREE.Vector3(),
+            halfX: PLAYER_RADIUS,
+            halfZ: PLAYER_RADIUS,
+            halfY: 0.7,
+            visual: remoteObstacleVisual,
+          };
+          remoteObstaclePool[remoteIdx] = entry;
+        }
+        entry.center.set(view.x, 0, view.z);
+        frameObstacles.push(entry);
+        remoteIdx += 1;
+      });
+
       const r = player.update(
         dt,
         input.axes.moveForward,
         input.axes.moveRight,
-        level.obstacles,
+        frameObstacles,
       );
 
       // Drive the camera AFTER the player update so the follow yaw uses
@@ -552,18 +849,32 @@ async function boot() {
       // End-of-run conditions, in priority order.
       // In MP, the local 'timeout' status is suppressed: the server's
       // round timer drives end-of-round state via the 'scoreboard'
-      // phase, and triggering both would double up "se acabó el tiempo"
-      // with the scoreboard overlay. Spill is still client-owned.
+      // phase, and triggering both would double up "time's up" messaging
+      // with the scoreboard overlay. Spill behaviour ALSO branches on
+      // mode (Phase 4.5):
+      //  - SP: classic game-over screen (consistent with the fable —
+      //    the milkmaid daydreams away her chance and loses everything).
+      //  - MP: soft-spill. Reset balance + dream chain locally, tell the
+      //    server (which rewinds `dreamIndex`/`litres` but KEEPS
+      //    `litresDelivered`), and keep playing. Progression visuals
+      //    catch up via the existing `subscribeSelfProgression`
+      //    "snap-to-0" branch when the schema patch lands.
       if (balance.isSpilled) {
-        status = 'spilled';
-        hud.setStatus(status, {
-          litresDelivered: progression.current.index,
-          currentDream: progression.current.dreamName,
-        });
+        if (serverProgressionLive) {
+          balance.reset();
+          multi.sendSpillReport();
+          hud.showToast(SPILL_TOAST_TEXT, 2200);
+        } else {
+          status = 'spilled';
+          hud.setStatus(status, {
+            litresDelivered: currentLitresDelivered(),
+            currentDream: progression.current.dreamName,
+          });
+        }
       } else if (!serverRoundLive && timeRemaining <= 0) {
         status = 'timeout';
         hud.setStatus(status, {
-          litresDelivered: progression.current.index,
+          litresDelivered: currentLitresDelivered(),
           currentDream: progression.current.dreamName,
         });
       } else if (distance < level.goalRadius) {
@@ -591,10 +902,7 @@ async function boot() {
           progression.advance();
           applyCurrentDream(true);
           const nextName = progression.current.dreamName;
-          hud.showToast(
-            `¡Has conseguido ${obtained.toLowerCase()}! Ahora sueñas con ${nextName.toLowerCase()}`,
-            2200,
-          );
+          hud.showToast(dreamAdvanceToast(obtained, nextName), 2200);
         }
       }
     } else {

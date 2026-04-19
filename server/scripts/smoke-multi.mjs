@@ -7,7 +7,11 @@ const endpoint = process.env.MP_ENDPOINT ?? 'ws://localhost:2567';
 
 async function spawnClient(label) {
   const client = new Client(endpoint);
-  const room = await client.joinOrCreate('milk-dreams');
+  // Names are mandatory (Phase 6) — derive from the label so each
+  // joiner has a >= 3-char unique identity.
+  const room = await client.joinOrCreate('milk-dreams', {
+    name: `Multi-${label}`,
+  });
   const seen = new Map(); // sessionId -> {name, colorHue}
 
   const $ = getStateCallbacks(room);

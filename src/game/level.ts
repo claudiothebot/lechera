@@ -1,4 +1,10 @@
 import * as THREE from 'three';
+import {
+  GOAL_RADIUS,
+  SPAWN_X,
+  SPAWN_Z,
+  goalFor,
+} from '@milk-dreams/shared';
 import { loadPbrMaterial } from '../render/textures';
 import { loadHouseModel } from './houseModel';
 
@@ -25,6 +31,12 @@ export interface Level {
    * level.
    */
   setGoalPosition(position: THREE.Vector3): void;
+  /**
+   * Append collision volumes (e.g. tweet billboards loaded after `createLevel`).
+   * Player + minimap see them on the next frame; `visual` may be an empty
+   * group if there is no extra mesh to show.
+   */
+  addObstacles(extra: readonly Obstacle[]): void;
 }
 
 export interface PathMesh {
@@ -157,16 +169,20 @@ export function createLevel(): Level {
   const path = buildCurvedPath(PATH_WAYPOINTS, PATH_WIDTH);
   group.add(path.mesh);
 
-  const spawn = new THREE.Vector3(0, 0, 20);
-  const goal = new THREE.Vector3(0, 0, -30);
-  const goalRadius = 2.5;
+  const spawn = new THREE.Vector3(SPAWN_X, 0, SPAWN_Z);
+  const goal0 = goalFor(0);
+  const goal = new THREE.Vector3(goal0.x, 0, goal0.z);
+  const goalRadius = GOAL_RADIUS;
 
   // Goal marker: just a ring (no filled disc), matching the style of the
   // spawn circle. An optional "reward animal" gets parented under
   // `goalAnchor` by main.ts — it's what really tells the player where to
   // go, the ring is a subtle "step onto here" affordance.
+  /** Inner / outer radii: keep the band narrow (~half the old 12% width). */
+  const goalRingInner = goalRadius * 0.955;
+  const goalRingOuter = goalRadius;
   const goalRing = new THREE.Mesh(
-    new THREE.RingGeometry(goalRadius * 0.88, goalRadius, 48),
+    new THREE.RingGeometry(goalRingInner, goalRingOuter, 48),
     new THREE.MeshBasicMaterial({
       color: 0xf1d28d,
       transparent: true,
@@ -180,7 +196,7 @@ export function createLevel(): Level {
   group.add(goalRing);
 
   const dotTex = createSparkleDotTexture();
-  const goalRingR = goalRadius * 0.9;
+  const goalRingR = (goalRingInner + goalRingOuter) * 0.5;
   const goalSparkles = createStaticRingSparkles(
     goalRingR,
     18,
@@ -225,12 +241,25 @@ export function createLevel(): Level {
     makeBox(group, new THREE.Vector3(-12, 0, -28), 1.2, 1.2, 1.0),
   ];
 
+  // The painted disc on the ground has to be big enough to comfortably
+  // hold ~10 lecheras at spawn time without them piling up on top of
+  // each other. Single-player only ever has one occupant so this used
+  // to be a thin 1.4 m ring (cosmetic only). Phase 6b made the server
+  // pick a random spawn inside this disc, so the visual now defines
+  // the area budget too: with 10 players × π·PLAYER_RADIUS² ≈ 6.4 m²
+  // of footprint, a 3 m radius disc (~28 m²) gives ~22 % density —
+  // tight but never an actual pile-up. The Phase 6d player-player
+  // collision pushes any residual overlaps apart on the next frame.
+  // Keep the visual style minimal (thin ring, low opacity) so the
+  // larger marker doesn't dominate the meadow.
+  const spawnRingInner = 2.94;
+  const spawnRingOuter = 3.0;
   const spawnMarker = new THREE.Mesh(
-    new THREE.RingGeometry(1.2, 1.5, 32),
+    new THREE.RingGeometry(spawnRingInner, spawnRingOuter, 64),
     new THREE.MeshBasicMaterial({
       color: 0x7f8cff,
       transparent: true,
-      opacity: 0.4,
+      opacity: 0.45,
       side: THREE.DoubleSide,
     }),
   );
@@ -238,7 +267,7 @@ export function createLevel(): Level {
   spawnMarker.position.copy(spawn).setY(0.04);
   group.add(spawnMarker);
 
-  const spawnRingMid = (1.2 + 1.5) * 0.5 * 0.92;
+  const spawnRingMid = (spawnRingInner + spawnRingOuter) * 0.5 * 0.92;
   const spawnSparkles = createStaticRingSparkles(
     spawnRingMid,
     14,
@@ -253,6 +282,12 @@ export function createLevel(): Level {
   spawnSparkGroup.add(spawnSparkles);
   group.add(spawnSparkGroup);
 
+  function addObstacles(extra: readonly Obstacle[]) {
+    for (const o of extra) {
+      obstacles.push(o);
+    }
+  }
+
   return {
     group,
     spawn,
@@ -263,6 +298,7 @@ export function createLevel(): Level {
     path,
     goalAnchor,
     setGoalPosition,
+    addObstacles,
   };
 }
 

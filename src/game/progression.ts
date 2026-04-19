@@ -1,8 +1,9 @@
 import * as THREE from 'three';
+import { DREAM_GOALS, GOAL_RADIUS } from '@milk-dreams/shared';
 import type { AnimalKey } from './levelAnimals';
 
 /**
- * Progression = the chain of "sueños" that escalates from the classic
+ * Progression = the chain of dreams that escalates from the classic
  * fable (eggs → cow) into modern aspirations (Ferrari, mansion). Every
  * successful delivery raises the litre count, moves the goal elsewhere
  * on the map and makes the jug harder (bigger, heavier, tips sooner).
@@ -18,13 +19,13 @@ import type { AnimalKey } from './levelAnimals';
  * (Ferrari, mansion) — each delivery is a bigger dream and a harder run.
  */
 const NAMED_DREAMS: readonly string[] = [
-  'Huevos',
-  'Gallinas',
-  'Cerdo',
-  'Ternero',
-  'Vaca',
+  'Eggs',
+  'Hens',
+  'Pig',
+  'Calf',
+  'Cow',
   'Ferrari',
-  'Mansión',
+  'Mansion',
 ];
 
 /**
@@ -41,24 +42,6 @@ const DREAM_ANIMALS: readonly AnimalKey[] = [
   'ferrari',
   'mansion',
 ];
-
-/**
- * Goal positions (XZ on the ground plane) used in order. Once we've
- * delivered to all of them, endless mode keeps cycling through the list.
- * Positions are kept within the 100m grass plane and away from obstacles
- * so the Lechera can reach any of them without being stuck.
- */
-const DREAM_GOALS: ReadonlyArray<readonly [number, number]> = [
-  [0, -30],
-  [28, -8],
-  [20, 22],
-  [-24, 12],
-  [-22, -22],
-  [10, 30],
-  [-32, -2],
-];
-
-const GOAL_RADIUS = 2.5;
 
 export interface DreamConfig {
   /** 0-based delivery index. 0 = before first delivery. */
@@ -152,15 +135,26 @@ export function createProgression(): Progression {
  *                endgame require skill instead of button-mashing.
  *
  * The curve is deliberately steep:
- *   Huevos (n=0):  baseline — noticeable sway but easy to correct
- *   Gallinas (n=1): ~50 % more inertia, 20 % less correction
- *   Cerdo (n=2):    inertia 2×, correction down to 60 %
- *   Ternero (n=3):  jug feels loose, every turn is a liability
- *   Vaca (n=4):     another game entirely — you plan the route first
+ *   Eggs (n=0):   baseline — noticeable sway but easy to correct
+ *   Hens (n=1):   ~50 % more inertia, 20 % less correction
+ *   Pig (n=2):    inertia 2×, correction down to 60 %
+ *   Calf (n=3):   jug feels loose, every turn is a liability
+ *   Cow (n=4):    another game entirely — you plan the route first
  *   Endless (n≥5):  floors kick in, but n=5 is already near-bottom on
  *                   most scales, so endless stays brutal without
  *                   becoming "impossible with extra steps"
  */
+
+/**
+ * Uniform jug visual scale for a 0-based dream index. Matches
+ * `DreamConfig.jugScale` / `player.jugAnchor` in single-player and
+ * multiplayer remotes.
+ */
+export function jugScaleForDreamIndex(index: number): number {
+  const n = Math.max(0, index);
+  return Math.min(1.0 + 0.12 * n, 2.2);
+}
+
 function makeDream(index: number): DreamConfig {
   const isEndless = index >= NAMED_DREAMS.length;
   const cyclicIdx = index % NAMED_DREAMS.length;
@@ -170,10 +164,10 @@ function makeDream(index: number): DreamConfig {
   const animalKey = isEndless ? 'moneybag' : DREAM_ANIMALS[cyclicIdx]!;
 
   const goalXZ = DREAM_GOALS[index % DREAM_GOALS.length]!;
-  const goal = new THREE.Vector3(goalXZ[0], 0, goalXZ[1]);
+  const goal = new THREE.Vector3(goalXZ.x, 0, goalXZ.z);
 
   const n = index;
-  const jugScale = Math.min(1.0 + 0.12 * n, 2.2);
+  const jugScale = jugScaleForDreamIndex(n);
   const stabilityScale = Math.max(1.0 - 0.18 * n, 0.25);
   const inertiaScale = Math.min(1.0 + 0.5 * n, 4.0);
   const dampingScale = Math.max(1.0 - 0.15 * n, 0.3);
@@ -182,7 +176,7 @@ function makeDream(index: number): DreamConfig {
 
   return {
     index,
-    dreamName: isEndless ? `Sueño sin fin · ${name}` : name,
+    dreamName: isEndless ? `Endless · ${name}` : name,
     litres: index + 1,
     isEndless,
     goal,
@@ -196,4 +190,9 @@ function makeDream(index: number): DreamConfig {
   };
 }
 
+/**
+ * Re-exported from `@milk-dreams/shared` so callers can keep
+ * importing it from the progression module (its historical home)
+ * without reaching for the shared package directly.
+ */
 export const PROGRESSION_GOAL_RADIUS = GOAL_RADIUS;

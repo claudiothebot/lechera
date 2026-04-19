@@ -13,6 +13,7 @@
  *    while the WS handshake completes, so the player isn't left guessing.
  */
 import { Client, Room, getStateCallbacks } from '@colyseus/sdk';
+import { sanitiseName } from '@milk-dreams/shared';
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'online' | 'offline';
 
@@ -37,6 +38,12 @@ export interface RemotePlayerView {
   dreamIndex: number;
   /** Litres currently being carried (server-authoritative; equals dreamIndex + 1). */
   litres: number;
+  /**
+   * Phase 4.5 — cumulative litres delivered THIS ROUND. Survives a
+   * spill (only `dreamIndex`/`litres` are rewound). The scoreboard
+   * ranks by this number, not by `dreamIndex`.
+   */
+  litresDelivered: number;
 }
 
 export interface RemotePlayerEvents {
@@ -54,6 +61,8 @@ export interface RemotePlayerEvents {
 export interface SelfProgressionView {
   dreamIndex: number;
   litres: number;
+  /** Phase 4.5 — cumulative litres delivered this round (monotonic). */
+  litresDelivered: number;
 }
 
 export interface SelfProgressionEvents {
@@ -111,6 +120,13 @@ export interface MultiplayerHandle {
   /** Server-assigned session id. Null until connected. */
   selfSessionId(): string | null;
   /**
+   * Resolved WebSocket endpoint we tried to connect to (e.g.
+   * `ws://localhost:2567`). Returns the resolved endpoint regardless
+   * of whether the connection ultimately succeeded — useful for
+   * deriving the matching HTTP origin (Phase 5 leaderboard).
+   */
+  endpoint(): string;
+  /**
    * Submit the current local pose. Internally rate-limited to 20 Hz.
    * Safe to call every frame regardless of connection state.
    */
@@ -124,6 +140,14 @@ export interface MultiplayerHandle {
    * "in goal radius" branch without flooding the room.
    */
   sendDeliveryClaim(sample: PoseSample): void;
+  /**
+   * Phase 4.5 — tell the server we just spilled. Server rewinds our
+   * `dreamIndex` (and `litres`) to 0 but keeps `litresDelivered`,
+   * letting us keep playing the same round with reset progression.
+   * Internally throttled so a one-frame spill burst doesn't flood the
+   * room. Safe to call while offline (no-op).
+   */
+  sendSpillReport(): void;
   /**
    * Subscribe to the lifecycle of OTHER players in the room (self is
    * always filtered out). Returns an unsubscribe function. If the
@@ -178,6 +202,15 @@ export interface MultiplayerHandle {
 
 export interface ConnectOptions {
   endpoint?: string;
+  /**
+   * Phase 6a — display name chosen by the player (cached on their end
+   * in `localStorage`). Mandatory: the welcome modal blocks until the
+   * player enters a value that passes `sanitiseName`. We re-validate
+   * here too as defense in depth — if a programming bug ever passes
+   * an invalid name, the room would reject the join anyway, so we'd
+   * rather fail fast and locally with a clear log line.
+   */
+  name: string;
   /** Notified whenever status changes; useful for HUD wiring. */
   onStatusChange?: (status: ConnectionStatus, selfName: string | null) => void;
 }
@@ -189,10 +222,31 @@ export interface ConnectOptions {
  * in try/catch.
  */
 export async function connectMultiplayer(
-  opts: ConnectOptions = {},
+  opts: ConnectOptions,
 ): Promise<MultiplayerHandle> {
   const endpoint = resolveEndpoint(opts.endpoint);
   const onStatusChange = opts.onStatusChange ?? (() => {});
+
+  // Phase 6a — re-run the SAME sanitisation the modal uses (and the
+  // server uses) so we know exactly what name will land on the wire.
+  // If it doesn't pass, refuse to even attempt the join: the modal
+  // is supposed to make this unreachable, so a failure here is a
+  // programming bug worth surfacing in the console.
+  const name = sanitiseName(opts.name);
+  if (name === null) {
+    console.warn(
+      `[multiplayer] invalid display name (got '${opts.name}'). Running in single-player.`,
+    );
+    onStatusChange('offline', null);
+    return makeOfflineHandle(
+      () => 'offline',
+      () => null,
+      () => null,
+      new Map(),
+      new Set(),
+      endpoint,
+    );
+  }
 
   let status: ConnectionStatus = 'connecting';
   let selfName: string | null = null;
@@ -200,6 +254,7 @@ export async function connectMultiplayer(
   let room: Room | null = null;
   let lastPoseSentMs = 0;
   let lastClaimSentMs = 0;
+  let lastSpillSentMs = 0;
   let disposed = false;
 
   /** Live state of every player in the room EXCEPT self. */
@@ -217,6 +272,14 @@ export async function connectMultiplayer(
   const selfProgressionSubs = new Set<SelfProgressionEvents>();
   /** Throttle for `claim_delivery`: at most one in-flight per N ms. */
   const CLAIM_THROTTLE_MS = 500;
+  /**
+   * Throttle for `report_spill`. Lower than the delivery throttle
+   * because a spill is a single user-visible event that we want
+   * acknowledged ASAP; the throttle exists only to absorb the case
+   * where the local sim flips `isSpilled` for a few consecutive
+   * frames before the server-driven reset lands.
+   */
+  const SPILL_THROTTLE_MS = 300;
   /**
    * Latest round snapshot in CLIENT timeline (phaseEndsAt converted from
    * server `Date.now()` to client `performance.now()` at receive time).
@@ -237,7 +300,7 @@ export async function connectMultiplayer(
   try {
     const client = new Client(endpoint);
     room = await Promise.race<Room>([
-      client.joinOrCreate(ROOM_NAME, {}),
+      client.joinOrCreate(ROOM_NAME, { name }),
       new Promise<Room>((_, rej) =>
         setTimeout(
           () => rej(new Error('connect timeout')),
@@ -256,6 +319,7 @@ export async function connectMultiplayer(
       () => selfSessionId,
       remotes,
       subscribers,
+      endpoint,
     );
   }
 
@@ -268,6 +332,7 @@ export async function connectMultiplayer(
       () => selfSessionId,
       remotes,
       subscribers,
+      endpoint,
     );
   }
 
@@ -328,6 +393,7 @@ export async function connectMultiplayer(
     const snapshot: SelfProgressionView = {
       dreamIndex: selfPlayer.dreamIndex,
       litres: selfPlayer.litres,
+      litresDelivered: selfPlayer.litresDelivered,
     };
     for (const sub of selfProgressionSubs) sub.onChange(snapshot);
   };
@@ -472,6 +538,7 @@ export async function connectMultiplayer(
     status: () => status,
     selfName: () => selfName,
     selfSessionId: () => selfSessionId,
+    endpoint: () => endpoint,
     sendPose: (sample) => {
       if (disposed || status !== 'online' || !room) return;
       const now = performance.now();
@@ -503,6 +570,22 @@ export async function connectMultiplayer(
         }
       }
     },
+    sendSpillReport: () => {
+      if (disposed || status !== 'online' || !room) return;
+      const now = performance.now();
+      if (now - lastSpillSentMs < SPILL_THROTTLE_MS) return;
+      lastSpillSentMs = now;
+      try {
+        room.send('report_spill', {});
+      } catch (err) {
+        if ((err as Error).message) {
+          console.debug(
+            '[multiplayer] spill send failed:',
+            (err as Error).message,
+          );
+        }
+      }
+    },
     subscribeRemotePlayers: (events) => {
       subscribers.add(events);
       // Replay any remotes that joined before this subscription, so the
@@ -522,6 +605,7 @@ export async function connectMultiplayer(
         events.onChange({
           dreamIndex: selfPlayer.dreamIndex,
           litres: selfPlayer.litres,
+          litresDelivered: selfPlayer.litresDelivered,
         });
       }
       return () => {
@@ -530,7 +614,11 @@ export async function connectMultiplayer(
     },
     selfProgression: () =>
       selfPlayer
-        ? { dreamIndex: selfPlayer.dreamIndex, litres: selfPlayer.litres }
+        ? {
+            dreamIndex: selfPlayer.dreamIndex,
+            litres: selfPlayer.litres,
+            litresDelivered: selfPlayer.litresDelivered,
+          }
         : null,
     selfView: () => selfPlayer,
     subscribeRound: (events) => {
@@ -559,6 +647,7 @@ function makeOfflineHandle(
   getSessionId: () => string | null,
   remotes: Map<string, RemotePlayerView>,
   subscribers: Set<RemotePlayerEvents>,
+  endpoint: string,
 ): MultiplayerHandle {
   const selfProgressionSubs = new Set<SelfProgressionEvents>();
   const roundSubs = new Set<RoundEvents>();
@@ -566,8 +655,10 @@ function makeOfflineHandle(
     status: getStatus,
     selfName: getName,
     selfSessionId: getSessionId,
+    endpoint: () => endpoint,
     sendPose: () => {},
     sendDeliveryClaim: () => {},
+    sendSpillReport: () => {},
     subscribeRemotePlayers: (events) => {
       subscribers.add(events);
       return () => {
@@ -604,8 +695,10 @@ export const OFFLINE_MULTIPLAYER_HANDLE: MultiplayerHandle = {
   status: () => 'idle',
   selfName: () => null,
   selfSessionId: () => null,
+  endpoint: () => '',
   sendPose: () => {},
   sendDeliveryClaim: () => {},
+  sendSpillReport: () => {},
   subscribeRemotePlayers: () => () => {},
   subscribeSelfProgression: () => () => {},
   selfProgression: () => null,

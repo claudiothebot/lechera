@@ -14,6 +14,9 @@
     "@colyseus/core": "^0.17.41",
     "@colyseus/schema": "^4.0.20",
     "@colyseus/ws-transport": "^0.17.13",
+    "@milk-dreams/shared": "workspace:*",
+    "@supabase/supabase-js": "^2.103.3",
+    "dotenv": "^17.4.2",
     "express": "^5.2.1"
   },
   "devDependencies": {

@@ -6,7 +6,8 @@ const endpoint = process.env.MP_ENDPOINT ?? 'ws://localhost:2567';
 const client = new Client(endpoint);
 
 try {
-  const room = await client.joinOrCreate('milk-dreams');
+  // Names are mandatory (Phase 6) — server rejects join without one.
+  const room = await client.joinOrCreate('milk-dreams', { name: 'SmokeBot' });
   console.log(`[smoke] joined room ${room.roomId} as session ${room.sessionId}`);
 
   await new Promise((resolve) => {

@@ -3,9 +3,14 @@ import { Schema, MapSchema, defineTypes } from '@colyseus/schema';
 import {
   DELIVERY_TOLERANCE,
   GOAL_RADIUS,
+  MAX_NAME_LENGTH,
+  MIN_NAME_LENGTH,
   goalFor,
   litresFor,
-} from '../game/dreams.js';
+  sanitiseName,
+  spawnPositionInRing,
+} from '@milk-dreams/shared';
+import { getLeaderboardStore } from '../persistence/supabase.js';
 
 /**
  * One connected Lechera. Phase 3 added `dreamIndex` and `litres` so the
@@ -39,6 +44,15 @@ export class Player extends Schema {
    * needing the dreams table.
    */
   litres = 1;
+  /**
+   * Phase 4.5 — cumulative litres successfully delivered THIS ROUND.
+   * Monotonically increasing across deliveries; survives a spill (we
+   * only reset `dreamIndex`/`litres` on spill, not the running total)
+   * and only resets to 0 at `startRound`. This is the field the
+   * scoreboard ranks by, not `dreamIndex`, because soft-spill makes
+   * "current dream" a poor proxy for total contribution.
+   */
+  litresDelivered = 0;
 }
 defineTypes(Player, {
   name: 'string',
@@ -48,6 +62,7 @@ defineTypes(Player, {
   colorHue: 'number',
   dreamIndex: 'number',
   litres: 'number',
+  litresDelivered: 'number',
 });
 
 /**
@@ -96,18 +111,62 @@ interface ClaimDeliveryMessage {
 }
 
 /**
- * Sequential player numbering, room-scoped. Resets per room instance,
- * which is fine while we have a single-room model.
+ * Phase 6 — join options. The client supplies the display name the
+ * player typed in the welcome modal (cached in `localStorage` on its
+ * end). The server re-runs the same validation as the client —
+ * `sanitiseName` is shared via `@milk-dreams/shared` — and REJECTS
+ * the join when the result is invalid. There is no auto "Player N"
+ * fallback any more: the client modal blocks until the player picks
+ * something valid, so any join that arrives without a usable name is
+ * a misbehaving client and gets bounced.
  */
-let nextPlayerNumber = 1;
+interface JoinOptions {
+  name?: string;
+}
+
+/**
+ * Reconnect grace window (Phase 6c). When a player leaves with a
+ * non-zero `litresDelivered` during the playing phase, we cache their
+ * round state under their name; if anyone joins with the same name
+ * within this window we restore the cached state instead of starting
+ * fresh. 30 s is enough to cover a tab refresh / a quick network
+ * blip but short enough that a different person typing the same name
+ * a minute later doesn't inherit a stranger's score.
+ */
+const RECONNECT_TTL_MS = 30_000;
+
+/**
+ * Cached state from a player who recently left, keyed by display name.
+ * `dreamIndex` and `litres` are intentionally NOT preserved — the
+ * reconnecting player respawns at index 0 (small jug, first goal) so
+ * they don't materialise mid-jug-balance with no input history. Only
+ * `litresDelivered` (the score field) is preserved.
+ *
+ * Lives at MODULE scope (not per-room) on purpose: Colyseus disposes
+ * the room instance whenever the last player leaves, so a per-room
+ * `Map` would be wiped exactly when we need it most (the "everyone
+ * leaves and one person comes back" path is the canonical reconnect
+ * scenario). The module is a singleton in the Node process, so it
+ * survives room churn for as long as the server stays up — which is
+ * the right scope: surviving a server restart would require the
+ * Supabase persistence layer (`milk_dreams.rankings` is what makes
+ * scores durable across restarts).
+ */
+interface ReconnectEntry {
+  litresDelivered: number;
+  /** Server `Date.now()` ms — used to expire entries past TTL. */
+  leftAtMs: number;
+}
+const recentlyLeftByName = new Map<string, ReconnectEntry>();
 
 /**
  * Color palette as HSL hues in [0, 1). Eight evenly-spread, distinct
- * colors. The Nth player to join takes palette[(N-1) % palette.length],
- * so the first eight players are guaranteed unique colors. Saturation
- * and lightness are picked client-side so we can keep the palette
- * compact on the wire.
+ * colors. The Nth player to join (across the process lifetime) takes
+ * `palette[N % palette.length]`, so the first eight players are
+ * guaranteed unique colors. Saturation and lightness are picked
+ * client-side so we can keep the palette compact on the wire.
  */
+let nextColorIndex = 0;
 const PLAYER_HUE_PALETTE: readonly number[] = [
   0.02, // warm red
   0.10, // orange
@@ -193,10 +252,39 @@ export class MilkDreamsRoom extends Room<{ state: MilkDreamsState }> {
         return;
       }
 
+      // Phase 4.5: bank what we were CARRYING before bumping the index.
+      // Order matters: `p.litres` here is the size of the jar we just
+      // dropped off; after this line it becomes the next (bigger) one.
+      p.litresDelivered += p.litres;
       p.dreamIndex += 1;
       p.litres = litresFor(p.dreamIndex);
       console.log(
-        `[room] deliver  ${client.sessionId} -> dreamIndex=${p.dreamIndex} litres=${p.litres}`,
+        `[room] deliver  ${client.sessionId} -> dreamIndex=${p.dreamIndex} litres=${p.litres} total=${p.litresDelivered}`,
+      );
+    });
+
+    /**
+     * Phase 4.5 — soft-spill.
+     *
+     * Client tells us it spilled. We rewind the dream chain to 0 (small
+     * jug, first goal) but KEEP `litresDelivered` so the round
+     * contribution is preserved. This is what makes mid-round failure
+     * non-terminal in MP: you lose your progression, not your standings.
+     *
+     * Idempotent: a duplicate report (or one from a client that's
+     * already at index 0) is a no-op. Ignored during 'scoreboard' for
+     * the same reason as `claim_delivery`.
+     */
+    this.onMessage('report_spill', (client) => {
+      if (this.state.phase !== 'playing') return;
+      const p = this.state.players.get(client.sessionId);
+      if (!p) return;
+      if (p.dreamIndex === 0) return;
+      const lostIdx = p.dreamIndex;
+      p.dreamIndex = 0;
+      p.litres = litresFor(0);
+      console.log(
+        `[room] spill    ${client.sessionId} -> reset dreamIndex (was ${lostIdx}) total=${p.litresDelivered}`,
       );
     });
 
@@ -210,20 +298,86 @@ export class MilkDreamsRoom extends Room<{ state: MilkDreamsState }> {
     );
   }
 
-  override onJoin(client: Client): void {
-    const number = nextPlayerNumber++;
+  override onJoin(client: Client, options?: JoinOptions): void {
+    // Phase 6a — names are mandatory (min 3 chars). Validation is the
+    // SAME function the client uses (`@milk-dreams/shared:sanitiseName`)
+    // so any name accepted by the modal is also accepted here. Throw
+    // on invalid: Colyseus surfaces the message to the client's
+    // `joinOrCreate` promise reject path so the modal can show it.
+    const name = sanitiseName(options?.name);
+    if (name === null) {
+      throw new Error(
+        `Invalid name. Names must be ${MIN_NAME_LENGTH}-${MAX_NAME_LENGTH} characters after trimming.`,
+      );
+    }
+
+    const colorIndex = nextColorIndex++;
+
     const p = new Player();
-    p.name = `Player ${number}`;
-    p.colorHue = PLAYER_HUE_PALETTE[(number - 1) % PLAYER_HUE_PALETTE.length]!;
+    p.name = name;
+    p.colorHue =
+      PLAYER_HUE_PALETTE[colorIndex % PLAYER_HUE_PALETTE.length]!;
     p.dreamIndex = 0;
     p.litres = litresFor(0);
+    p.litresDelivered = 0;
+
+    // Phase 6b — spawn ring. Only used for the very first pose so that
+    // 10 lecheras joining at once don't materialise on top of each
+    // other; once the player starts moving, their pose is overwritten
+    // by their own `pose` messages anyway.
+    const spawn = spawnPositionInRing();
+    p.x = spawn.x;
+    p.z = spawn.z;
+    // Face roughly toward the center of the spawn / first goal so
+    // the camera doesn't drop behind a Lechera that's looking
+    // outward. The client overwrites `yaw` on its first pose send.
+    p.yaw = Math.PI;
+
+    // Phase 6c — reconnect. If someone with this exact (sanitised)
+    // name disconnected within the grace window, restore their round
+    // contribution. We do NOT restore `dreamIndex` / `litres` — the
+    // player respawns at the first dream so they don't appear with
+    // a fragile late-game jug right after a refresh.
+    const reconnect = recentlyLeftByName.get(name);
+    if (reconnect && Date.now() - reconnect.leftAtMs <= RECONNECT_TTL_MS) {
+      p.litresDelivered = reconnect.litresDelivered;
+      recentlyLeftByName.delete(name);
+      console.log(
+        `[room] reconnect ${name} -> restored litresDelivered=${p.litresDelivered}`,
+      );
+    } else if (reconnect) {
+      // TTL expired; clean up so the map doesn't grow forever.
+      recentlyLeftByName.delete(name);
+    }
+
     this.state.players.set(client.sessionId, p);
     console.log(
-      `[room] join  ${client.sessionId}  ->  ${p.name} (hue ${p.colorHue.toFixed(2)}) phase=${this.state.phase}`,
+      `[room] join  ${client.sessionId}  ->  ${p.name} (hue ${p.colorHue.toFixed(2)}) ` +
+        `spawn=(${p.x.toFixed(1)},${p.z.toFixed(1)}) phase=${this.state.phase}`,
     );
   }
 
   override onLeave(client: Client): void {
+    const p = this.state.players.get(client.sessionId);
+    if (p) {
+      // Phase 6c — only stash the round score for reconnect if there's
+      // something WORTH preserving and we're mid-round. During the
+      // scoreboard window everyone's about to be reset to 0 anyway,
+      // so a reconnect would just re-zero them; skip the cache.
+      if (p.litresDelivered > 0 && this.state.phase === 'playing') {
+        recentlyLeftByName.set(p.name, {
+          litresDelivered: p.litresDelivered,
+          leftAtMs: Date.now(),
+        });
+      }
+      // Lazy TTL sweep: cheap O(n) scan of an at-most-tens-of-entries
+      // map; avoids a separate timer (which `tsx watch` would leak on
+      // reload — see the hot-reload note in MULTIPLAYER.md).
+      const cutoff = Date.now() - RECONNECT_TTL_MS;
+      for (const [name, entry] of recentlyLeftByName) {
+        if (entry.leftAtMs < cutoff) recentlyLeftByName.delete(name);
+      }
+    }
     this.state.players.delete(client.sessionId);
     console.log(`[room] leave ${client.sessionId}`);
   }
@@ -241,12 +395,13 @@ export class MilkDreamsRoom extends Room<{ state: MilkDreamsState }> {
    * every `scoreboard → playing` transition. Resets every connected
    * player's progression to zero — by the time we get here the clients
    * already showed the scoreboard, so this is the visual "everyone goes
-   * back to Huevos" beat.
+   * back to Eggs" moment.
    */
   private startRound(): void {
     this.state.players.forEach((p) => {
       p.dreamIndex = 0;
       p.litres = litresFor(0);
+      p.litresDelivered = 0;
     });
     this.state.roundNumber += 1;
     this.state.phase = 'playing';
@@ -255,7 +410,9 @@ export class MilkDreamsRoom extends Room<{ state: MilkDreamsState }> {
       `[room] round ${this.state.roundNumber} started (ends in ${Math.round(ROUND_DURATION_MS / 1000)}s)`,
     );
     this.phaseTimer = setTimeout(
-      () => this.endRound(),
+      () => {
+        void this.endRound();
+      },
       ROUND_DURATION_MS,
     );
   }
@@ -266,19 +423,40 @@ export class MilkDreamsRoom extends Room<{ state: MilkDreamsState }> {
    * the live `dreamIndex` values, and zeroing them out now would make
    * everyone display "0 deliveries" during the celebration.
    */
-  private endRound(): void {
-    this.state.phase = 'scoreboard';
-    this.state.phaseEndsAt = Date.now() + SCOREBOARD_DURATION_MS;
+  private async endRound(): Promise<void> {
     // Iterate via `forEach` because MapSchema in @colyseus/schema 4.x is
     // not a real Map (no spreadable iterator) — see Phase 2 notes in
     // MULTIPLAYER.md. `forEach` always works.
     const tops: string[] = [];
-    this.state.players.forEach((p) => tops.push(`${p.name}=${p.dreamIndex}`));
+    // Phase 5 — snapshot the round's contributions BEFORE startRound
+    // zeroes out `litresDelivered`. Names are spoofable by design — see
+    // `MULTIPLAYER.md` — so two different sessions claiming the same
+    // name will accumulate into the same row. Acceptable for a casual
+    // party game.
+    const contributions: { name: string; litres: number }[] = [];
+    this.state.players.forEach((p) => {
+      tops.push(`${p.name}=${p.litresDelivered}L(d${p.dreamIndex})`);
+      if (p.litresDelivered > 0) {
+        contributions.push({ name: p.name, litres: p.litresDelivered });
+      }
+    });
+
+    // Persist FIRST, then flip the phase. See the block comment at the
+    // top of this method for the rationale.
+    await getLeaderboardStore().recordRoundContributions(contributions);
+
+    this.state.phase = 'scoreboard';
+    this.state.phaseEndsAt = Date.now() + SCOREBOARD_DURATION_MS;
     console.log(
       `[room] round ${this.state.roundNumber} ended -> scoreboard for ${Math.round(SCOREBOARD_DURATION_MS / 1000)}s ; ${tops.join(' ')}`,
     );
+
     this.phaseTimer = setTimeout(
-      () => this.startRound(),
+      () => {
+        // setTimeout doesn't await; wrap to surface any unexpected
+        // error from startRound (which is sync today but may grow).
+        void this.startRound();
+      },
       SCOREBOARD_DURATION_MS,
     );
   }

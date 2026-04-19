@@ -6,16 +6,19 @@
   "scripts": {
     "dev": "vite",
     "dev:server": "pnpm --filter milk-dreams-server dev",
-    "dev:all": "pnpm run --parallel \"/^dev(:server)?$/\"",
-    "build": "tsc --noEmit && vite build",
-    "build:server": "pnpm --filter milk-dreams-server build",
+    "dev:shared": "pnpm --filter @milk-dreams/shared dev",
+    "dev:all": "pnpm --filter @milk-dreams/shared build && pnpm run --parallel \"/^dev(:shared|:server)?$/\"",
+    "build:shared": "pnpm --filter @milk-dreams/shared build",
+    "build": "pnpm build:shared && tsc --noEmit && vite build",
+    "build:server": "pnpm build:shared && pnpm --filter milk-dreams-server build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
-    "typecheck:all": "pnpm typecheck && pnpm --filter milk-dreams-server typecheck"
+    "typecheck": "pnpm build:shared && tsc --noEmit",
+    "typecheck:all": "pnpm build:shared && tsc --noEmit && pnpm --filter milk-dreams-server typecheck"
   },
   "packageManager": "pnpm@10.18.2+sha512.9fb969fa749b3ade6035e0f109f0b8a60b5d08a1a87fdf72e337da90dcc93336e2280ca4e44f2358a649b83c17959e9993e777c2080879f3801e6f0d999ad3dd",
   "dependencies": {
     "@colyseus/sdk": "^0.17.40",
+    "@milk-dreams/shared": "workspace:*",
     "three": "^0.184.0"
   },
   "devDependencies": {

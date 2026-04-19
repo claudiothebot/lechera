@@ -109,7 +109,7 @@ export interface JugBalanceConfig {
    * Scales the player's corrective torque from the arrow keys (<1 means
    * the jug resists being yanked upright, so the player has to anticipate
    * the sway instead of reacting to it). Paired with rising `inertiaScale`
-   * this is what makes late-game runs feel like carrying a loose cántaro.
+   * this is what makes late-game runs feel like carrying a loose jar.
    */
   correctionScale?: number;
   /**

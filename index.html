@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -14,7 +14,29 @@
   </head>
   <body>
     <div id="app">
-      <div id="loading-screen" aria-live="polite">Cargando…</div>
+      <div id="loading-screen" aria-live="polite">Loading…</div>
+      <div id="name-modal" class="name-modal hidden" aria-hidden="true" role="dialog" aria-labelledby="name-modal-title">
+        <div class="name-modal__panel">
+          <h2 id="name-modal-title" class="name-modal__title">What's your name?</h2>
+          <p class="name-modal__subtitle">It'll appear above your lechera and on the leaderboard.</p>
+          <form id="name-modal-form" class="name-modal__form" autocomplete="off">
+            <input
+              id="name-modal-input"
+              class="name-modal__input"
+              type="text"
+              minlength="3"
+              maxlength="18"
+              placeholder="e.g. Marta"
+              spellcheck="false"
+              autocapitalize="off"
+              autocorrect="off"
+              required
+            />
+            <button class="name-modal__primary" type="submit" disabled>Start</button>
+          </form>
+          <p id="name-modal-error" class="name-modal__error" aria-live="polite"></p>
+        </div>
+      </div>
       <canvas id="game"></canvas>
       <div id="hud">
         <div id="hud-left-column">
@@ -23,41 +45,42 @@
               <span class="net-badge__dot" aria-hidden="true"></span>
               <span class="net-badge__text">Local</span>
             </div>
-            <div id="hud-time-block" aria-label="Tiempo restante">
+            <div id="hud-time-block" aria-label="Time remaining">
+              <div id="hud-round" class="hud-round">Round 1</div>
               <div id="timer-value" class="hud-value">3:00</div>
             </div>
             <div id="hud-milk-block">
-              <div class="hud-milk-grid" role="group" aria-label="Leche">
-                <div class="hud-milk-stat">
-                  <span class="hud-label hud-label-tight">Ahora</span>
-                  <div class="hud-milk-value-row">
-                    <img
-                      class="hud-milk-icon-sm"
-                      src="/assets/milk-jug.svg"
-                      width="20"
-                      height="20"
-                      alt=""
-                    />
-                    <span id="litres-carrying" class="hud-value">1 L</span>
+              <div class="hud-milk-stack" role="group" aria-label="Milk">
+                <div class="hud-milk-row hud-milk-row--carry">
+                  <img
+                    class="hud-milk-icon"
+                    src="/assets/milk-jug.svg"
+                    width="26"
+                    height="26"
+                    alt=""
+                  />
+                  <div class="hud-milk-row__meta">
+                    <span class="hud-label">Holding</span>
+                    <span id="litres-carrying" class="hud-value hud-value--milk">1 L</span>
                   </div>
                 </div>
-                <div class="hud-milk-stat">
-                  <span class="hud-label hud-label-tight">Dejado</span>
-                  <div class="hud-milk-value-row">
-                    <img
-                      class="hud-milk-icon-sm"
-                      src="/assets/milk-jug.svg"
-                      width="20"
-                      height="20"
-                      alt=""
-                    />
-                    <span id="litres-delivered" class="hud-value">0 L</span>
+                <div class="hud-milk-row hud-milk-row--done">
+                  <img
+                    class="hud-milk-icon hud-milk-icon--muted"
+                    src="/assets/milk-jug.svg"
+                    width="26"
+                    height="26"
+                    alt=""
+                  />
+                  <div class="hud-milk-row__meta">
+                    <span class="hud-label hud-label--muted">Dropped off</span>
+                    <span id="litres-delivered" class="hud-value hud-value--milk hud-value--milk-delivered">0 L</span>
                   </div>
                 </div>
               </div>
             </div>
             <p id="debug-playtest-hint" class="hud-playtest-hint hidden" aria-hidden="true">
-              INVENCIBLE
+              INVINCIBLE
             </p>
           </div>
         </div>
@@ -73,9 +96,9 @@
         </div>
 
         <div id="hud-right-stack">
-          <div id="minimap-wrap" title="Radar · distancia a la meta">
+          <div id="minimap-wrap" title="Radar · distance to goal">
             <canvas id="minimap"></canvas>
-            <div id="minimap-distance" class="minimap-distance-overlay" aria-label="Distancia a la meta">
+            <div id="minimap-distance" class="minimap-distance-overlay" aria-label="Distance to goal">
               <span class="distance-num">—</span><span class="distance-unit">m</span>
             </div>
           </div>
@@ -92,11 +115,18 @@
 
         <div id="scoreboard" class="scoreboard hidden" aria-hidden="true">
           <div class="scoreboard__panel">
-            <div class="scoreboard__title">Fin de la ronda</div>
+            <div class="scoreboard__title">Round over</div>
             <div class="scoreboard__subtitle">
-              Próxima en <span id="scoreboard-countdown">10</span>s
+              Next in <span id="scoreboard-countdown">10</span>s
             </div>
             <ol id="scoreboard-list" class="scoreboard__list"></ol>
+
+            <div id="leaderboard-section" class="scoreboard__section">
+              <div class="scoreboard__section-title">All-time Top 10</div>
+              <ol id="leaderboard-list" class="scoreboard__list scoreboard__list--alltime">
+                <li class="scoreboard__placeholder">Loading…</li>
+              </ol>
+            </div>
           </div>
         </div>
       </div>

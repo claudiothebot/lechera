@@ -161,19 +161,37 @@ Phase 2 ships in two passes so we can validate the network plumbing before the v
 
 **Done when**: round ends synchronously for all, restart is automatic, late join works. ✅
 
-### Phase 5 — Persistent ranking (Supabase)
-- [ ] Schema: `rankings(name TEXT PRIMARY KEY, total_milk INT, runs_played INT, last_played TIMESTAMPTZ)`
-- [ ] At round end, server upserts each player's contribution
-- [ ] In-game UI: "All-time Top 10" reachable from a HUD button or the end-of-round overlay
-- [ ] HUD already shows "current round Top" from in-memory server state — no DB needed for that
+### Phase 4.5 — Soft-spill + cumulative scoring (DONE)
+- [x] Server `Player` schema gains `litresDelivered: number` — monotonic per round, banks the litres of the jar that was just dropped off (`p.litresDelivered += p.litres` BEFORE incrementing `dreamIndex`). Reset to 0 only at `startRound` and on join.
+- [x] New `report_spill` server message: while `phase === 'playing'`, rewinds `dreamIndex` to 0 + `litres = litresFor(0)` but KEEPS `litresDelivered`. Idempotent (no-op when already at 0). Silently dropped during `'scoreboard'`.
+- [x] Scoreboard ranks by `litresDelivered` desc (was `dreamIndex`). HUD label switched from "X dream(s)" to "X L". Players that spilled often but kept playing rank above players that spilled and gave up.
+- [x] Client `multiplayer.ts`: `RemotePlayerView` + `SelfProgressionView` expose `litresDelivered`. New `sendSpillReport()` method (300 ms throttled, safe offline).
+- [x] Client `main.ts`: in MP, `balance.isSpilled` triggers a SOFT spill — `balance.reset()` locally, `multi.sendSpillReport()`, `SPILL_TOAST_TEXT` toast, NO game-over screen. The schema patch coming back as `dreamIndex=0` re-runs the existing "snap to 0" branch which rebuilds visuals (small jug, first goal). Position stays where it spilled (no teleport — less jarring).
+- [x] Client HUD "Dropped off" now shows cumulative litres (`currentLitresDelivered()`): online from `selfProgression().litresDelivered`, offline from the triangular sum `n*(n+1)/2` (which is what a clean SP chain produces anyway). The number visibly grows faster than before, which feels more rewarding.
+- [x] Single-player keeps the classic "spill = game over" model on purpose — consistent with the fable. The cumulative HUD number is purely cosmetic in SP because a clean chain is the only way to score.
+- [x] Smoke test (`server/scripts/smoke-spill.mjs`): clean delivery #1 (1 L) → #2 (3 L total) → spill (chain to 0, total preserved at 3) → delivery (4 L total). Also asserts duplicate spill at `dreamIndex=0` is a no-op.
 
-**Done when**: server restart doesn't lose scores; same name accumulates across sessions.
+**Done when**: spilling in MP no longer kicks you out of the round — you respawn with the small jug at your current location, your standings hold, and you can keep contributing. ✅
 
-### Phase 6 — Polish
-- [ ] Player ↔ player collision: lecheras push each other, the jug reacts to the impulse via `jugBalance.bumps`
-- [ ] Spawn distribution: small ring around the spawn marker so 10 players don't pile up
-- [ ] Reconnect: same name within X seconds resumes the round contribution
-- [ ] Name input: simple modal at game start, cached in `localStorage`
+### Phase 5 — Persistent ranking (Supabase) (DONE)
+- [x] Schema lives in a dedicated **`milk_dreams` schema** (not `public`) so the rankings table doesn't mix with the rest of the Supabase project. Table: `milk_dreams.rankings(name TEXT PK, total_milk INT, rounds_played INT, best_round_milk INT, last_played TIMESTAMPTZ)` plus a DESC index on `total_milk`. Two SECURITY DEFINER functions (`record_contribution(name, litres)` for the upsert, `top_rankings(limit)` for the read) gate ALL access — the table itself is unreachable to the anon role. Full DDL kept inside `lechera/server/.env.example` is *not* the source of truth: the canonical DDL was applied once via the Supabase SQL editor (we don't apply migrations from the agent — see project rules). Add `milk_dreams` to "Exposed schemas" in Project Settings → API or PostgREST returns `404 schema not found`.
+- [x] Server module `server/src/persistence/supabase.ts`: factory + lazy module-level singleton (`getLeaderboardStore()`). Reads `SUPABASE_URL` + `SUPABASE_ANON_KEY` from `process.env`; **falls back to a no-op store** when either is missing so local dev / CI runs unchanged. All Supabase calls are try/catch-wrapped — a transient outage logs a warning and returns `void` / `[]` instead of crashing the room.
+- [x] `MilkDreamsRoom.endRound()` now snapshots contributions BEFORE flipping the phase, then `await`s `recordRoundContributions(...)`, THEN flips to `'scoreboard'`. Order matters: clients fetch `/leaderboard` the moment they observe the phase change, so persisting first eliminates a client-visible race. The await adds Supabase RTT (~50–200 ms) to the transition — invisible in practice, and bounded by the dotenv-controlled timeout.
+- [x] Express route `GET /leaderboard?limit=N` (in `server/src/index.ts`): wildcard CORS (it's read-only public data), `Cache-Control: no-store`, returns `{ entries: [...] }`. Client never talks to Supabase directly — keeps anon key + URL out of the shipped JS bundle and lets the server be the single chokepoint for any future rate-limiting / sanitisation.
+- [x] Client module `src/net/leaderboard.ts`: `httpEndpointFromWs(ws)` derives the HTTP origin from the existing WS endpoint (no second config knob). `fetchLeaderboard(http, limit, timeoutMs=2500)` returns `[]` on any error so the HUD can render a clean "no data yet" placeholder instead of a spinner.
+- [x] HUD scoreboard panel ships an additional **"All-time Top 10"** section (`#leaderboard-section` in `index.html`, `.scoreboard__section*` styles). Renders `null` as "Loading…", `[]` as "No rounds played yet.", and otherwise lists name + `total_milk L`, with a `(you)` tag on rows whose name matches the local player. The local-round scoreboard above stays untouched.
+- [x] `MultiplayerHandle.endpoint()` exposes the resolved WS URL so `main.ts` can derive the matching HTTP origin once and stash it; refresh fires from the same `subscribeRound` branch that opens the scoreboard overlay.
+- [x] Env wiring: `dotenv/config` imported at the top of `server/src/index.ts` so a local `.env` is picked up automatically. `.env.example` documents the two required variables and the "Exposed schemas" gotcha. `.env` and `.env.local` are gitignored.
+- [x] Smoke test (`server/scripts/smoke-leaderboard.mjs`): boots a dedicated server on `:2569` (`MD_SMOKE_PORT`) with shrunk round / scoreboard durations. **Two modes**: when `SUPABASE_*` env vars are absent it just verifies `/leaderboard` returns `{ entries: [] }` (no DB calls); when present it joins, claims a delivery, lets the round end, fetches `/leaderboard`, and asserts the player's row appears with `total_milk` >= baseline + 1 (and accumulates over a second round if the auto-assigned name matches).
+
+**Done when**: server restart doesn't lose scores; same name accumulates across sessions; the in-game scoreboard shows the all-time Top 10 every round end. ✅
+
+### Phase 6 — Polish (DONE)
+- [x] Player ↔ player collision: lecheras push each other, the jug reacts to the impulse via `jugBalance.bumps`
+- [x] Spawn distribution: small ring around the spawn marker so 10 players don't pile up
+- [x] Reconnect: same name within 30 s resumes the round contribution (only `litresDelivered` is restored — `dreamIndex`/`litres` are reset so the player doesn't materialise on a fragile late-game jug)
+- [x] Name input: mandatory modal at game start (min 3 chars, validated with the same `sanitiseName` the server uses), cached in `localStorage`. No "skip" path: the server rejects joins without a valid name.
+- [x] Shared workspace package `@milk-dreams/shared` carries the dreams catalog (`DREAM_GOALS`, `goalFor`, `litresFor`, `GOAL_RADIUS`, `DELIVERY_TOLERANCE`), the spawn ring (`SPAWN_X/Z`, `SPAWN_RING_INNER_M/OUTER_M`, `spawnPositionInRing`), the name validation (`MIN_NAME_LENGTH`, `MAX_NAME_LENGTH`, `sanitiseName`, `isValidName`) and the leaderboard wire shape (`LeaderboardEntry`, `LeaderboardResponse`). Single source of truth for everything that has to agree across both sides.
 
 **Done when**: a real session with 5+ amigotes feels good end-to-end.
 
@@ -192,7 +210,14 @@ To keep momentum and avoid creep:
 
 ## Current state
 
-**Phase 4 done.** The server now drives the whole round lifecycle: a 3-minute `'playing'` phase followed by a 10-second `'scoreboard'` phase, looping forever. All clients share the same countdown (`phaseEndsAt` synced via the schema, converted from server `Date.now()` to client `performance.now()` once at receive). At the end of a round the scoreboard overlay shows the top 8 by deliveries with colored dots and the local player tagged "(tú)"; when the server flips back to `'playing'` everyone's `dreamIndex` resets to 0, spilled players are revived, positions reset to spawn. Late joiners land mid-round with the correct timer + a clean dream chain. `claim_delivery` is rejected during `'scoreboard'`. Offline mode still works exactly as before. Next stop: Phase 5 (Supabase-backed all-time leaderboard).
+**Phase 6 done.** Multiplayer is now feature-complete for a casual party session of ~10 lecheras:
+
+- **Mandatory name + modal** (`src/ui/nameModal.ts` + `index.html#name-modal`): on first boot a small modal blocks the screen and asks for a display name (min 3 / max 18 chars after sanitisation). The submit button stays disabled until live validation (the SAME `sanitiseName` from `@milk-dreams/shared` the server uses) accepts the input, and a small inline error explains the rule once the user has typed something. Once accepted, the name is cached in `localStorage` under `lechera.name`; subsequent loads skip the modal entirely. The chosen name is forwarded to `joinOrCreate('milk-dreams', { name })`; the server re-runs `sanitiseName` and **rejects the join** if the result fails — there is no auto-name fallback any more. Players can clear `localStorage.lechera.name` from devtools to re-prompt on next load.
+- **Spawn ring** (`shared/src/spawn.ts:spawnPositionInRing` + the cosmetic marker in `level.ts`): the server picks an area-uniform random point in an annulus `[0.5 m, 2.6 m]` around the world spawn `(0, 20)` for every joining or reconnecting player. Sampling `r = sqrt(lerp(r₁², r₂²))` keeps the distribution flat over the annulus area (no inner-edge bias). The painted spawn marker on the ground was widened from a thin 1.5 m ring to a thin 3.0 m ring so the visual matches the spawn budget — with 10 lecheras × π·PLAYER_RADIUS² ≈ 6.4 m² of footprint inside ≈ 20.4 m² of annulus the density sits around 31 % (tight but never pile-up). Two players landing within `2 × PLAYER_RADIUS` is fine: the Phase 6d player-player collision separates them on the next frame. Sizing history: the first iteration used `[1.0, 3.0]` (lecheras spawned outside the 1.5 m marker), then `[0.3, 1.2]` (fit inside the marker but mathematically too cramped for ~10 players), now `[0.5, 2.6]` paired with the wider marker. The client teleports to the server-picked position the first time the self schema hydrates (`player.reset(new Vector3(self.x, 0, self.z))`); subsequent server pose echoes are ignored so client-predictive movement isn't fought.
+- **Reconnect by name** (`MilkDreamsRoom.recentlyLeftByName`): when a player leaves with `litresDelivered > 0` during the playing phase, their score is cached at MODULE scope (NOT per-room — Colyseus disposes the room when the last player leaves, which is precisely the canonical reconnect scenario). A new join under the same sanitised name within `RECONNECT_TTL_MS = 30 s` restores `litresDelivered`; `dreamIndex` / `litres` are NOT restored so the reconnecting player respawns on the small jug at the first goal (a fragile late-game jug right after a refresh would feel terrible). Different names start at 0 (no cross-name leak). TTL eviction is a lazy O(n) sweep on every leave — no leaked timer under `tsx watch`.
+- **Player ↔ player collision** (`src/main.ts` per-frame `frameObstacles`): each frame we wrap every remote in a pre-pooled `Obstacle` AABB sized at `PLAYER_RADIUS`, concatenate with `level.obstacles`, and pass into the existing `player.update(...)` collision path. This gives lecheras a `2 × PLAYER_RADIUS = 0.9 m` collision diameter, produces `bumps` events that flow naturally through `jugBalance.bumps` (so a bodycheck tilts your jug exactly like banging into a wall), and costs essentially nothing per frame (~10 remotes × handful of field assignments). Each client resolves collision against the others on its own local sim, so the apparent push is roughly symmetric without server mediation.
+
+The full multiplayer roadmap (Phase 0–6) is now closed. The shared workspace package landed alongside the mandatory-name change (Phase 6 polish), so the only deferred infra item is picking a server hosting target (Fly / Railway / VPS).
 
 ### How to run multiplayer locally
 
@@ -207,7 +232,7 @@ pnpm dev
 pnpm dev:all
 ```
 
-Then open the game in the browser. The badge in the top-left corner shows the connection state (Single-player / Connecting… / Online · Player N). To point at a remote server: append `?mp=ws://hostname:2567` to the URL.
+Then open the game in the browser. A modal asks for your display name (min 3 chars) the first time; the badge in the top-left corner shows the connection state (Single-player / Connecting… / Online · {your name}). To point at a remote server: append `?mp=ws://hostname:2567` to the URL.
 
 ### Repo layout (current)
 
@@ -215,28 +240,43 @@ Phase 0/1 went in without renaming the existing `src/` to `client/src/` to avoid
 
 ```
 lechera/
-  pnpm-workspace.yaml
-  package.json                ← workspace root + client package
-  src/
-    net/
-      multiplayer.ts          ← client connector, 20 Hz pose throttle, fallback, remote-player subscription via getStateCallbacks
-      remotePlayers.ts        ← spawns / updates / disposes one avatar per remote, snapshot interpolation, name-tag sprites
-    ui/
-      minimap.ts              ← now also renders remote players as colored dots
-    main.ts                   ← wires connect → manager → per-frame update
-  server/                     ← workspace package "milk-dreams-server"
-    package.json
+  pnpm-workspace.yaml         ← lists `shared` and `server` as workspaces; root is the client package
+  package.json                ← workspace root + client package; depends on `@milk-dreams/shared: workspace:*`
+    src/
+      net/
+        multiplayer.ts          ← client connector, 20 Hz pose throttle, fallback, remote-player subscription via getStateCallbacks; mandatory `name` (validated with shared `sanitiseName`) forwarded to joinOrCreate (Phase 6a)
+        remotePlayers.ts        ← spawns / updates / disposes one avatar per remote, snapshot interpolation, name-tag sprites
+        leaderboard.ts          ← client-side fetch for the all-time leaderboard (Phase 5); re-exports the shared `LeaderboardEntry` type
+      ui/
+        minimap.ts              ← now also renders remote players as colored dots
+        nameModal.ts            ← Phase 6a: blocks on first boot until the player enters a valid name (min 3 chars), cached in localStorage. Validation comes from `@milk-dreams/shared:isValidName/sanitiseName`
+      main.ts                   ← wires connect → manager → per-frame update; teleports to server-picked spawn (Phase 6b); concatenates remote-player AABBs into the per-frame obstacle list (Phase 6d)
+  shared/                     ← workspace package "@milk-dreams/shared", source of truth for everything that must agree across both sides
+    package.json              ← compiles to `dist/`; client/server depend via `workspace:*`
     tsconfig.json
     src/
-      index.ts                ← Colyseus + WS transport + health endpoint
-      game/
-        dreams.ts             ← server-side mirror of the client's dreams catalog (goal positions, GOAL_RADIUS, litresFor)
-      rooms/MilkDreamsRoom.ts ← Player schema (name, x, z, yaw, colorHue, dreamIndex, litres) + room state (phase, phaseEndsAt, roundNumber), pose + claim_delivery handlers, hue palette, round-lifecycle timer (startRound / endRound)
+      index.ts                ← public surface (re-exports from the four modules below)
+      dreams.ts               ← `DREAM_GOALS`, `GOAL_RADIUS`, `DELIVERY_TOLERANCE`, `goalFor`, `litresFor`, `Goal2D`
+      spawn.ts                ← `SPAWN_X/Z`, `SPAWN_RING_INNER_M/OUTER_M`, `spawnPositionInRing()` (Phase 6b)
+      name.ts                 ← `MIN_NAME_LENGTH`, `MAX_NAME_LENGTH`, `sanitiseName`, `isValidName` (Phase 6a) — used by client modal + server `onJoin`
+      leaderboard.ts          ← wire shape `LeaderboardEntry` + `LeaderboardResponse` (Phase 5)
+  server/                     ← workspace package "milk-dreams-server"; depends on `@milk-dreams/shared: workspace:*`
+    package.json
+    tsconfig.json
+    .env.example              ← documents SUPABASE_URL + SUPABASE_ANON_KEY for Phase 5 (copy to .env to enable persistence)
+    src/
+      index.ts                ← dotenv preload + Colyseus + WS transport + health + GET /leaderboard
+      persistence/
+        supabase.ts           ← lazy singleton store backed by Supabase RPCs (`record_contribution`, `top_rankings`); no-op fallback when env vars are missing. Re-aliases `LeaderboardEntry` from shared as `RankingEntry` for in-house clarity
+      rooms/MilkDreamsRoom.ts ← Player schema (name, x, z, yaw, colorHue, dreamIndex, litres, litresDelivered) + room state (phase, phaseEndsAt, roundNumber), pose + claim_delivery + report_spill handlers, hue palette, round-lifecycle timer (endRound persists THEN flips phase). Phase 6: re-runs shared `sanitiseName` on `JoinOptions.name` and **throws (rejects the join) on invalid**, picks a ring spawn, restores `litresDelivered` from a module-scope `recentlyLeftByName` cache when a player rejoins under the same name within 30 s
     scripts/
       smoke-client.mjs        ← one-shot connect/leave smoke test
       smoke-multi.mjs         ← spawns two clients, asserts mutual visibility (Phase 2)
       smoke-delivery.mjs      ← validates claim_delivery accept/reject + state propagation + dream independence (Phase 3)
       smoke-rounds.mjs        ← spawns a dedicated server with shrunk phase durations, validates playing → scoreboard → playing transitions and round reset (Phase 4)
+      smoke-spill.mjs         ← validates report_spill: chain rewind preserves litresDelivered + idempotency at dreamIndex=0 (Phase 4.5)
+      smoke-leaderboard.mjs   ← boots a dedicated server on :2569; persistence-OFF asserts /leaderboard returns []; persistence-ON joins under a unique name and exercises end-to-end upsert + cross-round accumulation (Phase 5). Imports goal positions from `@milk-dreams/shared`
+      smoke-phase6.mjs        ← boots a dedicated server on :2571; validates custom-name acceptance, **REJECTION** of missing / too-short names, sanitisation (control chars, length cap, post-truncation trim), spawn ring distribution, reconnect by name within TTL (preserves litresDelivered, resets dreamIndex), and that a different name does NOT inherit a cached score (Phase 6). Pulls all constants and `goalFor` from `@milk-dreams/shared` so future tweaks propagate automatically.
 ```
 
 We'll re-evaluate the rename when remote-player rendering or shared types start to feel cramped.
@@ -255,11 +295,20 @@ We'll re-evaluate the rename when remote-player rendering or shared types start 
 - **Source/instance split for shared assets**: `loadCharacterSource(url)` caches the parsed GLB; `createCharacterInstance(source, opts)` builds a per-instance scene graph with its own bones, mixer and (optionally) cloned + tinted materials. Geometry is shared (cheap). Disposing an instance must NOT dispose the geometry — that would break every other live instance.
 - **Per-instance schema callbacks (0.17)**: same `getStateCallbacks(room)` proxy is callable on individual schema instances too. `$(playerSchema).onChange(cb)` fires whenever ANY field of that player changes (incl. position echoes from our own `pose` sends). For "react only when X changed" patterns, capture a previous value in closure and compare; the cost of a missed-equality check is way smaller than the cost of re-applying expensive game logic on every patch.
 - **Server-ack vs optimistic prediction**: for low-frequency, high-impact actions (delivery, scoring) we chose pure server-ack — no local advance, just send the claim and let the schema patch drive the visual update. The 50–150 ms round-trip is barely noticeable in this game's pace and removes a whole class of "client thinks it scored, server disagrees, rollback time" bugs. Movement stays client-authoritative because the same delay would be visceral on every keystroke.
-- **Dreams catalog duplication (server vs client)**: `server/src/game/dreams.ts` mirrors the goal positions and `GOAL_RADIUS` from `lechera/src/game/progression.ts`. The client also keeps its full `progression.ts` (animal, jug scale, balance multipliers — none of which the server cares about). Two copies, easy to drift. Promote to a `shared/` workspace package the moment we add a third shared shape (probably the leaderboard payload in Phase 5).
+- **Shared workspace package (`@milk-dreams/shared`)**: history — Phase 3 server kept its own copy of the dreams catalog in `server/src/game/dreams.ts`, mirroring the client's `progression.ts`. Phase 5 added the leaderboard wire shape as a third "must agree" surface, and Phase 6 added name validation (modal + `onJoin` rejection) as a fourth. That tipped the scale: we created `shared/` as a pnpm workspace package compiled to `dist/` (NodeNext, `.d.ts` emitted) and wired both client (Vite) and server (`tsx watch`) to depend on it via `workspace:*`. The package now owns the dreams catalog, spawn ring constants + `spawnPositionInRing`, name validation, and the leaderboard interfaces. The client still keeps its visual-only `progression.ts` extras (animal, jug scale, balance multipliers — none of which the server cares about) but imports the goal coordinates from the shared catalog. The server's old `game/dreams.ts` is deleted. Adding a new "shared" thing now means a single file under `shared/src/` plus a re-export in `shared/src/index.ts`.
 - **Top-level state field listening (0.17)**: schema callbacks aren't only for collections / instances — `$(state).listen('phase', cb, true)` works for primitive top-level fields and `immediate=true` fires once with the current value if it's already populated. Use it for room-wide state (round phase, deadlines, mode flags) instead of polling every frame; you also get cheap "did this actually change?" semantics for free because `cb(value, prev)` carries the previous value.
 - **Server `Date.now()` → client `performance.now()` conversion**: when shipping a deadline as `serverDeadlineMs` (Date.now() ms), convert at receive: `localDeadline = serverDeadline + (performance.now() - Date.now())`. The offset is captured once on every patch so any system-clock jump (NTP, suspend) self-corrects within a patch interval. Don't mix `Date.now()` and `performance.now()` for the same countdown — they tick the same rate normally but `Date.now()` can JUMP (and `performance.now()` is the one the rest of the codebase already uses for throttles).
 - **Round-end reset timing**: when ending a round, do NOT reset player progression at the SAME moment you flip into the scoreboard phase — the scoreboard renders from live `dreamIndex` values, and zeroing them then would show "0 deliveries" for everyone during the celebration. The right beat is to reset only at the `scoreboard → playing` transition. The client mirrors this: it suppresses the per-delivery toast when `dreamIndex` drops to 0 (interpreted as a round reset, not a delivery).
 - **Hot-reload + setTimeout in rooms**: `tsx watch` re-imports the room module on edits but does NOT call `onDispose` cleanly, so any `setTimeout` you stashed leaks. We're OK because the leftover handler runs against the stale `this.state` and silently no-ops. If you ever store the timer on a singleton or schedule heavy side-effects, clean up explicitly in `onDispose` (we already do `clearTimeout(this.phaseTimer)` for hygiene).
+- **Supabase + custom schema (PostgREST gotcha)**: PostgREST exposes only schemas listed in the project's API settings. After applying our `milk_dreams` DDL you MUST add `milk_dreams` to "Exposed schemas" (Project Settings → API → Exposed schemas) AND configure the JS client with `db: { schema: 'milk_dreams' }` — both are required. Symptom of forgetting either: `404 schema "milk_dreams" not found in public schema cache`. The functions are `SECURITY DEFINER` with `set search_path = ''` so they don't need any extra grants beyond `GRANT EXECUTE ... TO anon`; the underlying table itself is intentionally NOT granted to anon, which means a leaked anon key can only call our two RPCs — defense in depth on top of the "names are spoofable" trust model.
+- **Dotenv loading order**: `import 'dotenv/config'` MUST be the first import in `server/src/index.ts` (before any module that reads `SUPABASE_*` from `process.env`). Our `getLeaderboardStore()` is a lazy singleton and reads env vars only on first call, but the room module imports it at the top level — so if dotenv loaded after the room import, we'd race. Putting dotenv first is the simplest deterministic ordering.
+- **Async `endRound` + `setTimeout`**: turning `endRound` into `async` to await the Supabase upsert means the original `setTimeout(() => this.endRound(), ...)` now schedules a callback that returns a `Promise`. Wrap with `() => { void this.endRound(); }` so the timer doesn't end up holding an unhandled-rejection-style promise — the function's internal try/catch (via the store's swallow-and-return contract) means the wrapped void is genuinely fire-and-forget-safe.
+- **Reconnect cache MUST be module-scope, not per-room (Phase 6c)**: Colyseus auto-disposes the room instance whenever the last player leaves (default `autoDispose: true`). The canonical reconnect scenario — a single player refreshes their tab — therefore goes through `onLeave → onDispose → onCreate → onJoin`, blowing away any per-room state in the process. Our first `private recentlyLeft = new Map(...)` worked in unit tests where two clients overlapped, then silently failed on the real "reload my tab" path. Solution: `recentlyLeftByName` lives at module scope (singleton in the Node process) so it survives room churn. Surviving a server RESTART would require pushing the cache into Supabase, which we don't because the all-time leaderboard already covers the durable case.
+- **Sanitisation must trim AFTER truncation (Phase 6a)**: `raw.replace(...).trim().slice(0, MAX)` is buggy when truncation lands mid-space — `'Big Nasty Name Way Too Long'.slice(0, 18)` is `'Big Nasty Name Way '` with a trailing space. Always trim a second time after slicing. Smoke test (`smoke-phase6.mjs` step C) caught this on the first run; client and server share the same algorithm but each enforces it independently because trust boundaries.
+- **Player-as-AABB collision (Phase 6d)**: instead of adding a circle-circle collision path to `player.ts`, we wrap remote players in `Obstacle` AABBs sized at `PLAYER_RADIUS` and reuse the existing AABB code. The collision math `dist(closestPointOnAABB, next) < PLAYER_RADIUS` produces a 2 × PLAYER_RADIUS = 0.9 m collision diameter — exactly the visual footprint of two lecheras touching. Bonus: bumps already feed `jugBalance`, so the jug reaction is free. The `Obstacle` shells live in a per-frame pool (`remoteObstaclePool`) shared across frames so collision against 10 remotes costs ~10 field assignments per frame, not 10 allocations.
+- **Server-picked spawn + client teleport (Phase 6b)**: the server is authoritative on spawn, the client teleports to it on first hydration of the self schema. Subsequent server pose echoes are IGNORED — we don't want server-side pose to fight client-predictive movement (which would manifest as a tiny rubber-band on every patch). The teleport-once flag (`teleportedToServerSpawn`) lives on the closure that wires up the multiplayer handle, so it's automatically scoped to one connection lifetime; reconnects start a fresh closure → fresh teleport.
+- **Mandatory name + double validation (Phase 6a hardened)**: switching from "optional, server falls back to Player N" to "mandatory, server rejects" needed three coordinated edits — (1) `sanitiseName` returns `null` for inputs shorter than `MIN_NAME_LENGTH`, (2) the modal disables Submit until `isValidName` accepts the input AND removes the Skip button entirely (no "fall through" path), (3) `onJoin` re-runs `sanitiseName` and `throw`s a Colyseus-friendly Error when null — Colyseus translates that into a join rejection on the client. The client also pre-validates inside `connectMultiplayer` and short-circuits to an offline handle on a bad name, so we never burn a connection attempt on input we already know the server will refuse. The smoke test asserts both rejection paths (missing name, too short) AND the happy path (sanitised dirty input passes), giving us regression coverage on each side of the trust boundary.
+- **Workspace package consumption from Vite + tsx (Phase 6 shared)**: the `@milk-dreams/shared` package compiles ahead of time (`tsc --build` via `pnpm -r build`) and ships `dist/index.js` + `dist/index.d.ts`. Vite resolves the package transparently as long as `pnpm install` has linked `node_modules/@milk-dreams/shared` to the workspace folder; HMR works because Vite watches the linked `dist/`. The server uses `tsx watch src/index.ts` and also reads from the linked `dist/` — meaning when you edit a file under `shared/src/`, you need either `pnpm -r build` once or the `pnpm -F @milk-dreams/shared dev` watcher running in another terminal for the server to pick up the change. A future tweak: configure `tsx` and Vite with the package's `src/` exports so the build step disappears in dev. For now, the explicit build step is the price of "pure TypeScript NodeNext + ESM that survives both runtimes without bundler hacks".
 
 ## How to update this file
 

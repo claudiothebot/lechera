@@ -10,15 +10,18 @@
 // Run from the workspace root: `node server/scripts/smoke-delivery.mjs`.
 // Requires the dev server to be running on `MP_ENDPOINT` (default 2567).
 import { Client, getStateCallbacks } from '@colyseus/sdk';
+import { goalFor } from '@milk-dreams/shared';
 
 const endpoint = process.env.MP_ENDPOINT ?? 'ws://localhost:2567';
 
-// Must match `DREAM_GOALS[0]` in server/src/game/dreams.ts.
-const GOAL_0 = { x: 0, z: -30 };
+const GOAL_0 = goalFor(0);
 
 async function spawnClient(label) {
   const client = new Client(endpoint);
-  const room = await client.joinOrCreate('milk-dreams');
+  // Names are mandatory (Phase 6) — derive from the label.
+  const room = await client.joinOrCreate('milk-dreams', {
+    name: `Deliver-${label}`,
+  });
   const players = new Map(); // sessionId -> player schema view (live)
 
   const $ = getStateCallbacks(room);

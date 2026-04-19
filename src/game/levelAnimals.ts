@@ -4,7 +4,7 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
 
 /**
  * Reward animals placed on the current goal spot, three clones per dream
- * in the fable ("Huevos" → 3 baskets of eggs, "Gallinas" → 3 chickens, …).
+ * in the fable ("Eggs" → 3 baskets of eggs, "Hens" → 3 chickens, …).
  *
  * The models come from Meshy AI, optimized via `gltf-transform optimize`
  * into `/public/models/levels/*.glb` with meshopt + webp-compressed
@@ -24,7 +24,7 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
 /**
  * Key of the "reward" that appears on the current goal. Historically all
  * rewards were animals from the fable (eggs → cow), and then the dream
- * escalates into "Ferrari" and "Mansión" — still uses this key type for
+ * escalates into "Ferrari" and "Mansion" — still uses this key type for
  * simplicity since the type is just a tag for "what to show at the goal".
  */
 export type AnimalKey =
@@ -58,7 +58,8 @@ const ANIMAL_URLS: Record<AnimalKey, string> = {
  * of three small copies.
  */
 const TARGET_SIZE_M: Record<AnimalKey, number> = {
-  eggs: 0.55,
+  /** First phase — slightly larger baskets, tighter formation (see `formationFor`). */
+  eggs: 0.64,
   chicken: 0.75,
   pig: 1.35,
   calf: 1.4,
@@ -93,7 +94,7 @@ const FLOCK_COUNT: Record<AnimalKey, number> = {
  *
  * Varied yaw and scale keep it from looking like a copy-paste row.
  */
-const FORMATION: ReadonlyArray<{
+const DEFAULT_FORMATION: ReadonlyArray<{
   x: number;
   z: number;
   yaw: number;
@@ -103,6 +104,17 @@ const FORMATION: ReadonlyArray<{
   { x: -1.05, z: 0.45, yaw: 0.55, scale: 0.95 },
   { x: 0.95, z: 0.25, yaw: -1.0, scale: 1.0 },
 ];
+
+/** Eggs only: pull the three baskets closer so the first phase reads as one cluster. */
+const EGG_FORMATION: typeof DEFAULT_FORMATION = [
+  { x: 0.0, z: -0.18, yaw: -0.22, scale: 1.05 },
+  { x: -0.42, z: 0.24, yaw: 0.52, scale: 0.97 },
+  { x: 0.4, z: 0.2, yaw: -0.95, scale: 1.0 },
+];
+
+function formationFor(key: AnimalKey) {
+  return key === 'eggs' ? EGG_FORMATION : DEFAULT_FORMATION;
+}
 
 export interface LevelAnimals {
   /**
@@ -172,7 +184,8 @@ function buildFlock(
   const flock = new THREE.Group();
   flock.name = `flock-${key}`;
 
-  const count = Math.min(FLOCK_COUNT[key], FORMATION.length);
+  const formation = formationFor(key);
+  const count = Math.min(FLOCK_COUNT[key], formation.length);
   if (count === 1) {
     // Single-instance rewards (e.g. mansion) sit centred on the goal,
     // not using a formation slot — otherwise the building would land off
@@ -182,7 +195,7 @@ function buildFlock(
   }
 
   for (let i = 0; i < count; i++) {
-    const slot = FORMATION[i]!;
+    const slot = formation[i]!;
     const clone = master.clone(true);
     clone.position.set(slot.x, 0, slot.z);
     clone.rotation.y = slot.yaw;

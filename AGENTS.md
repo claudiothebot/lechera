@@ -4,6 +4,10 @@ Operative memory for the project. Update when decisions change. Read this before
 
 > **Multiplayer**: the project is being extended with online multi for ~10–20 friends. Before touching anything network-related (Colyseus server, remote players, ranking, round timer), read [`MULTIPLAYER.md`](./MULTIPLAYER.md). It owns the multi roadmap, decisions and current state.
 
+## Language (player-facing copy)
+
+**All in-game UI is English**: HTML `lang`, HUD labels, dream names (`progression.ts`), toasts, game-over messages, scoreboard, loading screen, and accessibility strings. Agent chat and Cursor **skills** may stay in Spanish; that does not change the product language.
+
 ## What this is
 
 A short prototype in pure Three.js (no React, no R3F) based on the folk tale of *La Lechera*. A milkmaid has to carry a jug of milk from A to B across a dreamlike world. The core tension is *not spilling*. Dreams appear as flavor and narrative, not as hard mechanics.

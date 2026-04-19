@@ -16,12 +16,12 @@
 import { Client, getStateCallbacks } from '@colyseus/sdk';
 import { spawn } from 'node:child_process';
 import { setTimeout as wait } from 'node:timers/promises';
+import { goalFor } from '@milk-dreams/shared';
 
 const PORT = 2568;
 const ENDPOINT = `ws://localhost:${PORT}`;
 
-// Same as DREAM_GOALS[0] in server/src/game/dreams.ts.
-const GOAL_0 = { x: 0, z: -30 };
+const GOAL_0 = goalFor(0);
 
 // Boot a dedicated server so the phase durations don't disrupt a parallel
 // dev session on the default 2567.
@@ -79,7 +79,8 @@ const waitForReady = async () => {
 await waitForReady();
 
 const client = new Client(ENDPOINT);
-const room = await client.joinOrCreate('milk-dreams');
+// Names are mandatory (Phase 6) — server rejects join without one.
+const room = await client.joinOrCreate('milk-dreams', { name: 'RoundsBot' });
 const $ = getStateCallbacks(room);
 
 const phaseLog = [];

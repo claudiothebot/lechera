@@ -3,9 +3,11 @@
  *
  * Design notes:
  *  - Each remote owns a `SkeletonUtils.clone` of the Lechera GLB plus a
- *    cloned (and tinted) jug. They share GPU geometry with the local
- *    player via the `CharacterSource`/`JugSource` cache, but get their
- *    own bones, mixer and materials so animation/tint are isolated.
+ *    cloned (and tinted) jug. Jug scale follows `view.dreamIndex` via
+ *    `jugScaleForDreamIndex` (same curve as the local `jugAnchor`). They
+ *    share GPU geometry with the local player via the
+ *    `CharacterSource`/`JugSource` cache, but get their own bones, mixer
+ *    and materials so animation/tint are isolated.
  *  - Snapshot interpolation: every remote renders ~100 ms behind the
  *    latest received pose. The buffer is filled when `view.x/y/yaw`
  *    changes (i.e. when a Colyseus patch lands and updates the schema
@@ -26,6 +28,7 @@ import {
   type Character,
   type CharacterSource,
 } from '../game/character';
+import { jugScaleForDreamIndex } from '../game/progression';
 import {
   createJugInstance,
   type JugSource,
@@ -44,11 +47,10 @@ const BODY_HEIGHT = 1.68;
 /** Reference walk speed at which the clip plays at native rate. */
 const WALK_SPEED_REFERENCE = 4.5;
 /**
- * Jug size for remotes. Slightly smaller than the local player's
- * gameplay jug — the remote's jug is decorative, doesn't represent the
- * scaling the local player sees as litres grow.
+ * Base jug height before `jugScaleForDreamIndex` (must match `main.ts`
+ * `JUG_TARGET_HEIGHT`).
  */
-const REMOTE_JUG_HEIGHT = 0.32;
+const JUG_TARGET_HEIGHT = 0.42;
 /** Vertical extra lift above the head bone so the jug sits on the skull. */
 const JUG_EXTRA_LIFT_Y = 0.08;
 /** Lift of the name tag above the jug, in metres. */
@@ -212,6 +214,8 @@ export function createRemotePlayers(
       // automatically (parented under it). Setting it again would
       // double-rotate.
 
+      applyRemoteJugProgression(avatar);
+
       if (avatar.view.name && avatar.view.name !== avatar.shownName) {
         redrawNameTag(avatar);
       }
@@ -279,20 +283,17 @@ function createAvatar(
   // a distance.
   const jugTint = new THREE.Color().setHSL(view.colorHue, 0.55, 0.78);
   const jug = createJugInstance(jugSource, {
-    targetHeight: REMOTE_JUG_HEIGHT,
+    targetHeight: JUG_TARGET_HEIGHT,
     tintColor: jugTint,
   });
   group.add(jug);
 
-  // Name tag: sprite anchored above the jug area in local space. The
-  // jug position is updated per frame from the head bone, so we hang
-  // the name off a fixed Y above the body height — close enough to the
-  // jug top for our aspect.
+  // Name tag: sprite anchored above the jug area in local space. Y is
+  // refreshed in `applyRemoteJugProgression` as `dreamIndex` scales the jug.
   const { sprite, texture } = createNameTag(view.name || '...', view.colorHue);
-  sprite.position.y = BODY_HEIGHT + REMOTE_JUG_HEIGHT + NAME_TAG_LIFT;
   group.add(sprite);
 
-  return {
+  const avatar: RemoteAvatar = {
     sessionId,
     view,
     group,
@@ -306,6 +307,15 @@ function createAvatar(
     nameSprite: sprite,
     nameTexture: texture,
   };
+  applyRemoteJugProgression(avatar);
+  return avatar;
+}
+
+/** Match local player: `jug.scale` from server `dreamIndex`; lift name tag with jug top. */
+function applyRemoteJugProgression(avatar: RemoteAvatar): void {
+  const s = jugScaleForDreamIndex(avatar.view.dreamIndex);
+  avatar.jug.scale.setScalar(s);
+  avatar.nameSprite.position.y = BODY_HEIGHT + JUG_TARGET_HEIGHT * s + NAME_TAG_LIFT;
 }
 
 function disposeAvatar(avatar: RemoteAvatar): void {

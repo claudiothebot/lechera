@@ -1,0 +1,26 @@
+{
+  "name": "@milk-dreams/shared",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared types and pure functions used by both the Milk Dreams client (Vite + Three.js) and the Colyseus server. No runtime deps — only data and tiny helpers that MUST agree across both sides (dreams catalog, spawn ring, name validation, leaderboard payload shape).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch --preserveWatchOutput",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}
