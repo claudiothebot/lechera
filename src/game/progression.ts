@@ -2,28 +2,35 @@ import * as THREE from 'three';
 import type { AnimalKey } from './levelAnimals';
 
 /**
- * Progression = the chain of "sueños" from the fable. Every successful
- * delivery raises the litre count, moves the goal elsewhere on the map
- * and makes the jug harder (bigger, heavier, tips sooner).
+ * Progression = the chain of "sueños" that escalates from the classic
+ * fable (eggs → cow) into modern aspirations (Ferrari, mansion). Every
+ * successful delivery raises the litre count, moves the goal elsewhere
+ * on the map and makes the jug harder (bigger, heavier, tips sooner).
  *
- * After the 5 named dreams we enter an endless mode whose curve keeps
+ * After the named dreams we enter an endless mode whose curve keeps
  * applying the same formulas, capped at safe maxima. A 3-minute timer
  * (owned by main.ts) eventually kills every run anyway.
  */
 
-/** Classic folk-tale ordering of the milkmaid's daydream. */
+/**
+ * Ordering of the milkmaid's daydream. Starts with the classic folk-tale
+ * chain (eggs → cow) and keeps escalating into modern aspirations
+ * (Ferrari, mansion) — each delivery is a bigger dream and a harder run.
+ */
 const NAMED_DREAMS: readonly string[] = [
   'Huevos',
   'Gallinas',
   'Cerdo',
   'Ternero',
   'Vaca',
+  'Ferrari',
+  'Mansión',
 ];
 
 /**
- * Reward animal shown on the goal spot for each dream, aligned with
+ * Reward shown on the goal spot for each dream, aligned with
  * NAMED_DREAMS. In endless mode we cycle through this list, so the
- * player sees every animal repeat rather than a single "final" one.
+ * player sees every reward repeat rather than a single "final" one.
  */
 const DREAM_ANIMALS: readonly AnimalKey[] = [
   'eggs',
@@ -31,13 +38,15 @@ const DREAM_ANIMALS: readonly AnimalKey[] = [
   'pig',
   'calf',
   'cow',
+  'ferrari',
+  'mansion',
 ];
 
 /**
  * Goal positions (XZ on the ground plane) used in order. Once we've
  * delivered to all of them, endless mode keeps cycling through the list.
- * Positions are kept within the grass plane and away from obstacles so the
- * Lechera can reach any of them without being stuck.
+ * Positions are kept within the 100m grass plane and away from obstacles
+ * so the Lechera can reach any of them without being stuck.
  */
 const DREAM_GOALS: ReadonlyArray<readonly [number, number]> = [
   [0, -30],
@@ -45,6 +54,8 @@ const DREAM_GOALS: ReadonlyArray<readonly [number, number]> = [
   [20, 22],
   [-24, 12],
   [-22, -22],
+  [10, 30],
+  [-32, -2],
 ];
 
 const GOAL_RADIUS = 2.5;
@@ -80,6 +91,16 @@ export interface Progression {
   readonly current: DreamConfig;
   /** Advance after a successful delivery and return the new current dream. */
   advance(): DreamConfig;
+  /**
+   * Force-set the current dream index, bypassing local advance. Used in
+   * multiplayer mode where the server is the source of truth: every
+   * accepted delivery arrives as a schema patch, the client just calls
+   * `setIndex(serverIndex)` and re-applies the dream visuals.
+   *
+   * Idempotent: calling with the same `index` is a no-op (returns the
+   * current dream without rebuilding it).
+   */
+  setIndex(index: number): DreamConfig;
   reset(): void;
 }
 
@@ -93,6 +114,13 @@ export function createProgression(): Progression {
     },
     advance() {
       index += 1;
+      current = makeDream(index);
+      return current;
+    },
+    setIndex(next: number) {
+      const safe = Math.max(0, Math.floor(next));
+      if (safe === index) return current;
+      index = safe;
       current = makeDream(index);
       return current;
     },
@@ -134,12 +162,12 @@ export function createProgression(): Progression {
  *                   becoming "impossible with extra steps"
  */
 function makeDream(index: number): DreamConfig {
-  // In endless mode we cycle through the named dreams so the player keeps
-  // seeing the fable's animals rotate rather than a single "final" one.
+  const isEndless = index >= NAMED_DREAMS.length;
   const cyclicIdx = index % NAMED_DREAMS.length;
   const name = NAMED_DREAMS[cyclicIdx]!;
-  const animalKey = DREAM_ANIMALS[cyclicIdx]!;
-  const isEndless = index >= NAMED_DREAMS.length;
+  // Named progression cycles eggs→mansion; endless runs show a money bag
+  // at the goal while dream names still rotate for the subtitle.
+  const animalKey = isEndless ? 'moneybag' : DREAM_ANIMALS[cyclicIdx]!;
 
   const goalXZ = DREAM_GOALS[index % DREAM_GOALS.length]!;
   const goal = new THREE.Vector3(goalXZ[0], 0, goalXZ[1]);

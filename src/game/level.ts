@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { loadPbrMaterial } from '../render/textures';
+import { loadHouseModel } from './houseModel';
 
 export interface Level {
   group: THREE.Group;
@@ -42,10 +43,21 @@ export interface Obstacle {
   halfZ: number;
   /** Half height for visual only (collision is 2D on XZ). */
   halfY: number;
+  /**
+   * Visual mesh/group parented under `level.group`. Starts as a
+   * placeholder box; `loadLevelHouses` swaps it for a house model
+   * once the GLB resolves.
+   */
+  visual: THREE.Object3D;
 }
 
-/** Size in metres of the flat grass plane. */
-const GROUND_SIZE = 200;
+/**
+ * Size in metres of the flat grass plane. Sized to frame the current
+ * ~50m gameplay corridor with some margin, and to comfortably host
+ * future 5–10 player multiplayer rounds without feeling like an empty
+ * sea of grass past the village.
+ */
+const GROUND_SIZE = 100;
 
 /** How many texture repeats per metre. Grass is coarse; dirt slightly tighter. */
 const GRASS_TILES_PER_METRE = 0.2;
@@ -68,6 +80,60 @@ const PATH_WAYPOINTS: ReadonlyArray<readonly [number, number]> = [
 ];
 
 const PATH_WIDTH = 3.2;
+
+/** Tiny soft dot for Points billboards — keeps glow very subtle vs harsh squares. */
+function createSparkleDotTexture(): THREE.CanvasTexture {
+  const s = 48;
+  const canvas = document.createElement('canvas');
+  canvas.width = s;
+  canvas.height = s;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    return new THREE.CanvasTexture(canvas);
+  }
+  const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s * 0.48);
+  g.addColorStop(0, 'rgba(255, 248, 230, 0.95)');
+  g.addColorStop(0.25, 'rgba(255, 240, 210, 0.35)');
+  g.addColorStop(1, 'rgba(255, 240, 210, 0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, s, s);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function createStaticRingSparkles(
+  ringR: number,
+  count: number,
+  color: number,
+  dotTex: THREE.Texture,
+  opts: { maxY: number; opacity: number; size: number },
+): THREE.Points {
+  const positions = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2 + (i % 3) * 0.11;
+    positions[i * 3] = Math.cos(a) * ringR;
+    positions[i * 3 + 1] = (((i * 0.6180339887) % 1) * 0.85 + 0.05) * opts.maxY;
+    positions[i * 3 + 2] = Math.sin(a) * ringR;
+  }
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const mat = new THREE.PointsMaterial({
+    map: dotTex,
+    color,
+    size: opts.size,
+    sizeAttenuation: true,
+    transparent: true,
+    opacity: opts.opacity,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+  });
+  const pts = new THREE.Points(geom, mat);
+  pts.frustumCulled = false;
+  pts.renderOrder = 1;
+  return pts;
+}
 
 export function createLevel(): Level {
   const group = new THREE.Group();
@@ -113,6 +179,23 @@ export function createLevel(): Level {
   goalRing.name = 'goal-ring';
   group.add(goalRing);
 
+  const dotTex = createSparkleDotTexture();
+  const goalRingR = goalRadius * 0.9;
+  const goalSparkles = createStaticRingSparkles(
+    goalRingR,
+    18,
+    0xfff3dd,
+    dotTex,
+    { maxY: 0.38, opacity: 0.2, size: 2.1 },
+  );
+  goalSparkles.name = 'goal-sparkles';
+
+  const goalSparkGroup = new THREE.Group();
+  goalSparkGroup.name = 'goal-spark-group';
+  goalSparkGroup.position.copy(goal).setY(0.04);
+  goalSparkGroup.add(goalSparkles);
+  group.add(goalSparkGroup);
+
   const goalAnchor = new THREE.Group();
   goalAnchor.name = 'goal-anchor';
   goalAnchor.position.copy(goal).setY(0);
@@ -121,14 +204,25 @@ export function createLevel(): Level {
   function setGoalPosition(position: THREE.Vector3) {
     goal.copy(position).setY(0);
     goalRing.position.set(position.x, 0.05, position.z);
+    goalSparkGroup.position.set(position.x, 0.04, position.z);
     goalAnchor.position.set(position.x, 0, position.z);
   }
 
+  // Houses scattered across the grass plane (not hugging the path) so the
+  // world reads as open countryside with occasional buildings. Positions
+  // stay |x| ≫ path width and clear `DREAM_GOALS` in progression.ts once
+  // `loadLevelHouses` applies the real ~7m footprint. Placeholder halfX/halfZ
+  // are only used until then.
   const obstacles: Obstacle[] = [
-    makeBox(group, new THREE.Vector3(-3, 0, 8), 1.2, 1.2, 1.0),
-    makeBox(group, new THREE.Vector3(4, 0, -2), 1.5, 0.8, 0.8),
-    makeBox(group, new THREE.Vector3(-2, 0, -14), 0.8, 2.0, 1.0),
-    makeBox(group, new THREE.Vector3(3.5, 0, -22), 1.0, 1.0, 0.9),
+    makeBox(group, new THREE.Vector3(-34, 0, 38), 1.2, 1.2, 1.0),
+    makeBox(group, new THREE.Vector3(28, 0, 32), 1.2, 1.2, 1.0),
+    makeBox(group, new THREE.Vector3(-38, 0, 8), 1.2, 1.2, 1.0),
+    makeBox(group, new THREE.Vector3(36, 0, 5), 1.2, 1.2, 1.0),
+    makeBox(group, new THREE.Vector3(-40, 0, -18), 1.2, 1.2, 1.0),
+    makeBox(group, new THREE.Vector3(32, 0, -38), 1.2, 1.2, 1.0),
+    makeBox(group, new THREE.Vector3(-18, 0, -44), 1.2, 1.2, 1.0),
+    makeBox(group, new THREE.Vector3(40, 0, -12), 1.2, 1.2, 1.0),
+    makeBox(group, new THREE.Vector3(-12, 0, -28), 1.2, 1.2, 1.0),
   ];
 
   const spawnMarker = new THREE.Mesh(
@@ -143,6 +237,21 @@ export function createLevel(): Level {
   spawnMarker.rotation.x = -Math.PI / 2;
   spawnMarker.position.copy(spawn).setY(0.04);
   group.add(spawnMarker);
+
+  const spawnRingMid = (1.2 + 1.5) * 0.5 * 0.92;
+  const spawnSparkles = createStaticRingSparkles(
+    spawnRingMid,
+    14,
+    0xc8d8ff,
+    dotTex,
+    { maxY: 0.32, opacity: 0.18, size: 2.0 },
+  );
+  spawnSparkles.name = 'spawn-sparkles';
+  const spawnSparkGroup = new THREE.Group();
+  spawnSparkGroup.name = 'spawn-spark-group';
+  spawnSparkGroup.position.copy(spawn).setY(0.035);
+  spawnSparkGroup.add(spawnSparkles);
+  group.add(spawnSparkGroup);
 
   return {
     group,
@@ -231,7 +340,50 @@ function makeBox(
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   parent.add(mesh);
-  return { center: center.clone().setY(halfY), halfX, halfZ, halfY };
+  return {
+    center: center.clone().setY(halfY),
+    halfX,
+    halfZ,
+    halfY,
+    visual: mesh,
+  };
+}
+
+/**
+ * Swap the placeholder obstacle boxes for a thatched village-house model.
+ * Each obstacle slot gets a clone of the same house, rotated by a
+ * different multiple of 90° for a touch of variety. Collision AABBs
+ * (`halfX`, `halfZ`, `halfY`) and the box-centre Y are updated from the
+ * real house footprint so the player can't walk through walls.
+ *
+ * Runs async: gameplay starts on the placeholder boxes and upgrades
+ * seamlessly once the GLB resolves.
+ */
+export async function loadLevelHouses(level: Level): Promise<void> {
+  const house = await loadHouseModel();
+
+  for (let i = 0; i < level.obstacles.length; i++) {
+    const obstacle = level.obstacles[i];
+    if (!obstacle) continue;
+
+    const instance = house.instance();
+    instance.position.set(obstacle.center.x, 0, obstacle.center.z);
+    instance.rotation.y = (i * Math.PI) / 2;
+    level.group.add(instance);
+
+    const old = obstacle.visual as THREE.Mesh;
+    level.group.remove(old);
+    old.geometry?.dispose();
+    const mat = old.material as THREE.Material | THREE.Material[] | undefined;
+    if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+    else mat?.dispose();
+
+    obstacle.visual = instance;
+    obstacle.halfX = house.halfX;
+    obstacle.halfZ = house.halfZ;
+    obstacle.halfY = house.halfY;
+    obstacle.center.y = house.halfY;
+  }
 }
 
 /**

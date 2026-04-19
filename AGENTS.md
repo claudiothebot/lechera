@@ -2,6 +2,8 @@
 
 Operative memory for the project. Update when decisions change. Read this before touching code.
 
+> **Multiplayer**: the project is being extended with online multi for ~10–20 friends. Before touching anything network-related (Colyseus server, remote players, ranking, round timer), read [`MULTIPLAYER.md`](./MULTIPLAYER.md). It owns the multi roadmap, decisions and current state.
+
 ## What this is
 
 A short prototype in pure Three.js (no React, no R3F) based on the folk tale of *La Lechera*. A milkmaid has to carry a jug of milk from A to B across a dreamlike world. The core tension is *not spilling*. Dreams appear as flavor and narrative, not as hard mechanics.
@@ -56,7 +58,6 @@ Nothing else.
 - main menu, settings, saves, localization
 - mobile and touch
 - tuning tier system, adaptive quality, benchmarks
-- multiplayer (singleplayer only, ever)
 
 ## Folder layout
 

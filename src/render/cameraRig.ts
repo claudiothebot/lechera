@@ -34,7 +34,7 @@ const OFFSET_DECAY_LAMBDA = 5.0;
 const MOUSE_SENSITIVITY = 0.0022;
 const MIN_PITCH = -0.25;
 const MAX_PITCH = 0.9;
-const DEFAULT_PITCH = 0.35;
+const DEFAULT_PITCH = 0.22;
 
 export interface CameraRig {
   /**

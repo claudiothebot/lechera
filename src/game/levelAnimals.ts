@@ -21,7 +21,22 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
  *    `level.goalAnchor` drops the flock on the ground.
  */
 
-export type AnimalKey = 'eggs' | 'chicken' | 'pig' | 'calf' | 'cow';
+/**
+ * Key of the "reward" that appears on the current goal. Historically all
+ * rewards were animals from the fable (eggs → cow), and then the dream
+ * escalates into "Ferrari" and "Mansión" — still uses this key type for
+ * simplicity since the type is just a tag for "what to show at the goal".
+ */
+export type AnimalKey =
+  | 'eggs'
+  | 'chicken'
+  | 'pig'
+  | 'calf'
+  | 'cow'
+  | 'ferrari'
+  | 'mansion'
+  /** Endless-mode reward after the named dreams (single bag at the goal). */
+  | 'moneybag';
 
 const ANIMAL_URLS: Record<AnimalKey, string> = {
   eggs: '/models/levels/eggs.glb',
@@ -29,11 +44,18 @@ const ANIMAL_URLS: Record<AnimalKey, string> = {
   pig: '/models/levels/pig.glb',
   calf: '/models/levels/calf.glb',
   cow: '/models/levels/cow.glb',
+  ferrari: '/models/levels/ferrari.glb',
+  mansion: '/models/levels/mansion.glb',
+  moneybag: '/models/levels/money-bag.glb',
 };
 
 /**
- * Target max-axis size per animal in metres. Tuned by eye so the group
- * reads right next to the Lechera (~1.68 m tall).
+ * Target max-axis size per reward in metres. Tuned by eye so the group
+ * reads right next to the Lechera (~1.68 m tall). Ferrari is car-sized
+ * (a bit longer than a cow). Mansion is intentionally bigger since it's
+ * a building the player is "dreaming of owning" — and we only show 1
+ * instance of it (see `FLOCK_COUNT`). Ferrari uses one larger car instead
+ * of three small copies.
  */
 const TARGET_SIZE_M: Record<AnimalKey, number> = {
   eggs: 0.55,
@@ -41,6 +63,26 @@ const TARGET_SIZE_M: Record<AnimalKey, number> = {
   pig: 1.35,
   calf: 1.4,
   cow: 1.7,
+  ferrari: 3.4,
+  mansion: 3.5,
+  /** Single bag at the goal in endless mode — large enough to read clearly. */
+  moneybag: 3.0,
+};
+
+/**
+ * How many clones to place at the goal per reward. 3 is the default
+ * "flock" (eggs, chickens, etc.). Mansion is a single building because
+ * three overlapping mansions would look absurd.
+ */
+const FLOCK_COUNT: Record<AnimalKey, number> = {
+  eggs: 3,
+  chicken: 3,
+  pig: 3,
+  calf: 3,
+  cow: 3,
+  ferrari: 1,
+  mansion: 1,
+  moneybag: 1,
 };
 
 /**
@@ -130,7 +172,17 @@ function buildFlock(
   const flock = new THREE.Group();
   flock.name = `flock-${key}`;
 
-  for (const slot of FORMATION) {
+  const count = Math.min(FLOCK_COUNT[key], FORMATION.length);
+  if (count === 1) {
+    // Single-instance rewards (e.g. mansion) sit centred on the goal,
+    // not using a formation slot — otherwise the building would land off
+    // to the side of the ring.
+    flock.add(master);
+    return flock;
+  }
+
+  for (let i = 0; i < count; i++) {
+    const slot = FORMATION[i]!;
     const clone = master.clone(true);
     clone.position.set(slot.x, 0, slot.z);
     clone.rotation.y = slot.yaw;

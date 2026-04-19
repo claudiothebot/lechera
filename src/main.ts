@@ -2,18 +2,35 @@ import * as THREE from 'three';
 import { createBootstrap } from './app/bootstrap';
 import { createResize } from './app/resize';
 import { createInputSystem } from './systems/input';
-import { createLevel, loadLevelTextures } from './game/level';
+import { createLevel, loadLevelHouses, loadLevelTextures } from './game/level';
 import { createPlayer } from './game/player';
 import { createJugBalance, type BumpInput } from './game/jugBalance';
-import { loadCharacter, type Character } from './game/character';
-import { loadJugModel } from './game/jugModel';
+import {
+  createCharacterInstance,
+  loadCharacterSource,
+  type Character,
+  type CharacterSource,
+} from './game/character';
+import {
+  createJugInstance,
+  loadJugSource,
+  type JugSource,
+} from './game/jugModel';
 import { loadLevelAnimals, type LevelAnimals } from './game/levelAnimals';
 import { createProgression } from './game/progression';
 import { createCameraRig } from './render/cameraRig';
 import { installHdriSky } from './render/sky';
 import { createHud, type GameStatus } from './ui/hud';
+import { createDreamPreview } from './ui/dreamPreview';
 import { createMinimap } from './ui/minimap';
 import { installMusicLoop } from './audio/music';
+import {
+  connectMultiplayer,
+  OFFLINE_MULTIPLAYER_HANDLE,
+  type MultiplayerHandle,
+} from './net/multiplayer';
+import { createRemotePlayers, type RemotePlayersManager } from './net/remotePlayers';
+import type { ScoreboardEntry } from './ui/hud';
 
 /** Cántaro: tamaño base en metros y elevación extra sobre el punto de cabeza. */
 const JUG_TARGET_HEIGHT = 0.42;
@@ -21,6 +38,12 @@ const JUG_EXTRA_LIFT_Y = 0.08;
 
 /** Total run time in seconds. The Lechera has to deliver as much as she can before this runs out. */
 const TOTAL_TIME_SECONDS = 180;
+
+/**
+ * Playtest: never game-over from spilling (tilt clamps at max instead).
+ * Set to `true` while tuning levels or rushing to late dreams.
+ */
+const DEBUG_INVINCIBLE = true;
 
 /**
  * Yaw → lateral-accel gain for the jug (m/s² per rad/s).
@@ -73,6 +96,10 @@ async function boot() {
     console.error('[level] failed to load ground textures', err);
   });
 
+  loadLevelHouses(level).catch((err) => {
+    console.error('[level] failed to load house obstacles', err);
+  });
+
   installHdriSky(
     renderer,
     scene,
@@ -87,27 +114,44 @@ async function boot() {
 
   const player = createPlayer(scene, level.spawn);
   const cameraRig = createCameraRig(camera);
-  const balance = createJugBalance();
+  const balance = createJugBalance({ invincible: DEBUG_INVINCIBLE });
   const input = createInputSystem(canvas);
   const hud = createHud();
+  hud.setDebugInvincible(DEBUG_INVINCIBLE);
   const minimapCanvas = document.querySelector<HTMLCanvasElement>('#minimap');
   if (!minimapCanvas) throw new Error('Canvas #minimap not found');
   const minimap = createMinimap(minimapCanvas);
+
+  const dreamPreviewCanvas = document.querySelector<HTMLCanvasElement>(
+    '#dream-preview-canvas',
+  );
+  if (!dreamPreviewCanvas) throw new Error('Canvas #dream-preview-canvas not found');
+  const dreamPreview = createDreamPreview(dreamPreviewCanvas);
   const progression = createProgression();
 
   const loadingEl = document.getElementById('loading-screen');
 
   let character: Character;
+  // Cached sources are reused by `remotePlayers` to clone an avatar per
+  // remote without refetching the GLBs. Cache lookup is sync after the
+  // first await, so creating extra instances later is cheap.
+  let characterSource: CharacterSource;
+  let jugSource: JugSource;
   try {
-    const [char, jugRoot] = await Promise.all([
-      loadCharacter('/models/lechera-walk-opt.glb', {
-        rotateYToMatchPlayerFront: true,
-        walkSpeedReference: 4.5,
-      }),
-      loadJugModel('/models/cantaro-opt.glb', { targetHeight: JUG_TARGET_HEIGHT }),
+    const [charSrc, jugSrc] = await Promise.all([
+      loadCharacterSource('/models/lechera-walk-opt.glb'),
+      loadJugSource('/models/cantaro-opt.glb'),
     ]);
-    character = char;
-    player.setVisual(char.root);
+    characterSource = charSrc;
+    jugSource = jugSrc;
+    character = createCharacterInstance(characterSource, {
+      rotateYToMatchPlayerFront: true,
+      walkSpeedReference: 4.5,
+    });
+    const jugRoot = createJugInstance(jugSource, {
+      targetHeight: JUG_TARGET_HEIGHT,
+    });
+    player.setVisual(character.root);
     player.setJugVisual(jugRoot);
   } catch (err) {
     console.error('[assets] failed to load Lechera / cántaro GLB', err);
@@ -120,6 +164,12 @@ async function boot() {
   }
 
   loadingEl?.classList.add('hidden');
+
+  if (DEBUG_INVINCIBLE) {
+    queueMicrotask(() => {
+      console.warn('[debug] DEBUG_INVINCIBLE: no fallo por derrame el cántaro');
+    });
+  }
 
   // Reward animals at the goal (eggs, chicken, pig, calf, cow). Loaded
   // async with a placeholder state: until they resolve, the goal is just
@@ -157,6 +207,7 @@ async function boot() {
       dampingScale: d.dampingScale,
       spillThresholdScale: d.spillThresholdScale,
       correctionScale: d.correctionScale,
+      invincible: DEBUG_INVINCIBLE,
     });
     // Every delivery also resets the balance: narratively the Lechera puts
     // one jar down and picks up a bigger one, so the tilt starts fresh.
@@ -176,16 +227,23 @@ async function boot() {
       level.goalAnchor.add(levelAnimals.get(d.animalKey));
     }
 
-    hud.setLitres(d.litres);
-    hud.setDream(d.dreamName, d.isEndless);
+    hud.setMilkStats(d.litres, d.index);
+    hud.setDreamLabel(d.dreamName);
+    dreamPreview.setKey(d.animalKey, levelAnimals);
   }
 
   function restart() {
-    progression.reset();
+    // Position + balance are client-authoritative, always safe to reset.
     player.reset(level.spawn);
     balance.reset();
     timeRemaining = TOTAL_TIME_SECONDS;
     status = 'playing';
+    // Progression is server-authoritative when online: the server keeps
+    // your `dreamIndex` across an in-tab restart anyway (you only get
+    // a new player number on a fresh WS connection). Resetting it
+    // locally would desync the HUD until the next schema patch lands.
+    // In offline mode we still need to rewind it ourselves.
+    if (!serverProgressionLive) progression.reset();
     applyCurrentDream(false);
     hud.setStatus(status);
     hud.setTime(timeRemaining);
@@ -199,6 +257,175 @@ async function boot() {
 
   installMusicLoop('/assets/milk-dreams-bgm.mp3', 0.35);
 
+  // Phase-1/2/3 multiplayer: best-effort connect, kicked off in the
+  // background so a slow / unreachable server doesn't delay the game's
+  // first frame. Until the handle resolves, `multi` is a no-op shim;
+  // afterward, every frame's `sendPose` lands on the real connection,
+  // `remotePlayers` starts spawning visuals for other players, and
+  // delivery validation moves to the server.
+  let multi: MultiplayerHandle = OFFLINE_MULTIPLAYER_HANDLE;
+  let remotePlayers: RemotePlayersManager | null = null;
+  /**
+   * Phase 3 — connection state for the progression source of truth.
+   *  - `false` (default): no server. Local progression decides everything.
+   *  - `true`:            server-authoritative. Local advance() is never
+   *    called from inside the goal-radius branch; we send `claim_delivery`
+   *    instead and react to the schema callback that bumps `dreamIndex`.
+   *
+   * We flip on the first self-progression event so we don't enter the
+   * online branch while the schema is still hydrating (would briefly
+   * stop sending claims with no replacement source).
+   */
+  let serverProgressionLive = false;
+  /**
+   * Phase 4 — server-driven round lifecycle. While `false`, the local
+   * `timeRemaining` timer ticks down as in single-player and the local
+   * 'timeout' game-over fires when it reaches zero. While `true`, the
+   * timer is read from `multi.round()` and the 'timeout' branch is
+   * skipped — the server's phase transition (playing → scoreboard →
+   * playing) drives everything instead.
+   */
+  let serverRoundLive = false;
+  /**
+   * Last server phase we acted on. `null` until the first round update
+   * arrives. We compare against the incoming phase to detect transitions
+   * (the only events that need side-effects: showing/hiding scoreboard,
+   * resetting the local sim).
+   */
+  let lastServerPhase: 'playing' | 'scoreboard' | null = null;
+  hud.setNetStatus('connecting', null);
+
+  /**
+   * Build the scoreboard entries for the current frame. Sorted by
+   * `dreamIndex` desc; ties broken by name for stable rendering.
+   * Capped at the top 8 to keep the panel readable on small screens.
+   */
+  function buildScoreboard(handle: MultiplayerHandle): ScoreboardEntry[] {
+    const entries: ScoreboardEntry[] = [];
+    const self = handle.selfView();
+    if (self) {
+      entries.push({
+        name: self.name,
+        deliveries: self.dreamIndex,
+        colorHue: self.colorHue,
+        isSelf: true,
+      });
+    }
+    handle.remotePlayers().forEach((view) => {
+      entries.push({
+        name: view.name,
+        deliveries: view.dreamIndex,
+        colorHue: view.colorHue,
+        isSelf: false,
+      });
+    });
+    entries.sort((a, b) => {
+      if (b.deliveries !== a.deliveries) return b.deliveries - a.deliveries;
+      return a.name.localeCompare(b.name);
+    });
+    return entries.slice(0, 8);
+  }
+  void connectMultiplayer({
+    onStatusChange: (status, name) => {
+      hud.setNetStatus(status, name);
+    },
+  }).then((handle) => {
+    multi = handle;
+    hud.setNetStatus(handle.status(), handle.selfName());
+    // Wire remote-player rendering. Safe to do unconditionally — the
+    // manager subscribes through the handle, so an offline handle just
+    // means "no remotes will ever appear" without throwing. Sources
+    // are pre-cached above, so spawning a remote later is synchronous.
+    remotePlayers = createRemotePlayers({
+      scene,
+      multi: handle,
+      characterSource,
+      jugSource,
+    });
+
+    // Phase 3 — react to server-driven progression changes for self.
+    // Fires once on hydration with the current snapshot, then on every
+    // accepted `claim_delivery`. Pose echoes ALSO fire onChange under
+    // the hood, so we guard with a "did dreamIndex actually move?"
+    // check before re-applying the dream (which is expensive: it
+    // reparents flock animals, resets balance, etc).
+    handle.subscribeSelfProgression({
+      onChange: (snapshot) => {
+        // First fire: take over from local progression.
+        if (!serverProgressionLive) {
+          serverProgressionLive = true;
+          // Sync local index with server so any HUD already showing
+          // stale local state catches up. Common path here: server
+          // initial state is index 0, local is also 0 → no-op.
+          if (progression.current.index !== snapshot.dreamIndex) {
+            progression.setIndex(snapshot.dreamIndex);
+            applyCurrentDream(false);
+          }
+          return;
+        }
+        // Subsequent fires: only act when dreamIndex changed (i.e. an
+        // accepted delivery). The pose echo will fire onChange on
+        // every patch but with the same dreamIndex; cheap to filter.
+        if (snapshot.dreamIndex === progression.current.index) return;
+        // Special case: the server resets `dreamIndex` to 0 at the
+        // start of each round. That's not a "delivery", so skip the
+        // toast — the round-transition branch handles its own UX.
+        if (snapshot.dreamIndex === 0) {
+          progression.setIndex(0);
+          applyCurrentDream(false);
+          return;
+        }
+        const obtained = progression.current.dreamName;
+        progression.setIndex(snapshot.dreamIndex);
+        applyCurrentDream(true);
+        const nextName = progression.current.dreamName;
+        hud.showToast(
+          `¡Has conseguido ${obtained.toLowerCase()}! Ahora sueñas con ${nextName.toLowerCase()}`,
+          2200,
+        );
+      },
+    });
+
+    // Phase 4 — react to round-lifecycle changes (3-min round ↔
+    // 10-second scoreboard between rounds).
+    handle.subscribeRound({
+      onChange: (snapshot) => {
+        // First server snapshot wins authority over the local timer.
+        // From now on the render loop reads the deadline off
+        // `handle.round()` and ignores the local `timeRemaining`.
+        if (!serverRoundLive) serverRoundLive = true;
+
+        const phaseChanged = snapshot.phase !== lastServerPhase;
+        const wasNull = lastServerPhase === null;
+        lastServerPhase = snapshot.phase;
+
+        // Re-fires of the same phase (e.g. only `phaseEndsAt` changed)
+        // don't need a transition effect — the per-frame countdown
+        // picks the new deadline up automatically.
+        if (!phaseChanged && !wasNull) return;
+
+        if (snapshot.phase === 'scoreboard') {
+          // Round just ended. Snapshot the standings and show the
+          // overlay; the per-frame loop updates the countdown digit.
+          const entries = buildScoreboard(handle);
+          const remainingSec = Math.max(
+            0,
+            (snapshot.phaseEndsAtMs - performance.now()) / 1000,
+          );
+          hud.showScoreboard(entries, remainingSec);
+        } else {
+          // Transitioned (back) into a playing phase — also covers the
+          // initial connect snapshot when we're already mid-round.
+          hud.hideScoreboard();
+          // Reset position + balance for the new round. Skip on the
+          // very first snapshot if we're already 'playing': nothing
+          // to reset, the player just spawned.
+          if (!wasNull) restart();
+        }
+      },
+    });
+  });
+
   renderer.setAnimationLoop(() => {
     const rawDt = clock.getDelta();
     const dt = Math.min(rawDt, 0.1);
@@ -211,10 +438,31 @@ async function boot() {
 
     if (input.consumeRestart()) restart();
 
+    // Phase 4 — pick the source of truth for the countdown timer:
+    //  - online + round hydrated: derive seconds-left from the server
+    //    deadline (already in client `performance.now()` ms space).
+    //  - otherwise: tick the local timer in game time as before.
+    const round = serverRoundLive ? multi.round() : null;
+    if (round) {
+      timeRemaining = Math.max(
+        0,
+        (round.phaseEndsAtMs - performance.now()) / 1000,
+      );
+      // While the scoreboard is up, the HUD's main timer freezes at 0:00
+      // (we already swap to the scoreboard countdown for the live digit)
+      // so it stops counting up the inter-round wait time.
+      hud.setTime(round.phase === 'playing' ? timeRemaining : 0);
+      if (round.phase === 'scoreboard') {
+        hud.setScoreboardCountdown(timeRemaining);
+      }
+    }
+
     if (status === 'playing') {
-      // Countdown timer ticks in game time.
-      timeRemaining = Math.max(0, timeRemaining - dt);
-      hud.setTime(timeRemaining);
+      if (!round) {
+        // Single-player / pre-hydration path.
+        timeRemaining = Math.max(0, timeRemaining - dt);
+        hud.setTime(timeRemaining);
+      }
 
       const r = player.update(
         dt,
@@ -302,32 +550,52 @@ async function boot() {
       hud.setBalance(balance.normalizedTilt);
 
       // End-of-run conditions, in priority order.
+      // In MP, the local 'timeout' status is suppressed: the server's
+      // round timer drives end-of-round state via the 'scoreboard'
+      // phase, and triggering both would double up "se acabó el tiempo"
+      // with the scoreboard overlay. Spill is still client-owned.
       if (balance.isSpilled) {
         status = 'spilled';
         hud.setStatus(status, {
           litresDelivered: progression.current.index,
           currentDream: progression.current.dreamName,
         });
-      } else if (timeRemaining <= 0) {
+      } else if (!serverRoundLive && timeRemaining <= 0) {
         status = 'timeout';
         hud.setStatus(status, {
           litresDelivered: progression.current.index,
           currentDream: progression.current.dreamName,
         });
       } else if (distance < level.goalRadius) {
-        // Successful delivery → advance progression, show toast, apply new
-        // dream config. The character keeps their current position; the
-        // goal moves somewhere else and the jug grows.
-        // Fable logic: she arrives with milk, imagines trading it for the
-        // reward of the current dream, then starts dreaming of the next.
-        const obtained = progression.current.dreamName;
-        progression.advance();
-        applyCurrentDream(true);
-        const nextName = progression.current.dreamName;
-        hud.showToast(
-          `¡Has conseguido ${obtained.toLowerCase()}! Ahora sueñas con ${nextName.toLowerCase()}`,
-          2200,
-        );
+        // Successful delivery. Two paths:
+        //  - Online: send a `claim_delivery` to the server; it validates
+        //    against its own goal table and bumps `dreamIndex`. The
+        //    `subscribeSelfProgression` listener wired above is what
+        //    actually advances the local progression + shows the toast,
+        //    so we don't double-fire here. Throttling lives inside
+        //    `sendDeliveryClaim`, so spamming this branch every frame
+        //    while inside the radius is harmless.
+        //  - Offline: keep the original local logic so single-player still
+        //    works without a server.
+        if (serverProgressionLive) {
+          multi.sendDeliveryClaim({
+            x: player.group.position.x,
+            z: player.group.position.z,
+            yaw: player.result.facing,
+          });
+        } else {
+          // Fable logic: she arrives with milk, imagines trading it for
+          // the reward of the current dream, then starts dreaming of
+          // the next.
+          const obtained = progression.current.dreamName;
+          progression.advance();
+          applyCurrentDream(true);
+          const nextName = progression.current.dreamName;
+          hud.showToast(
+            `¡Has conseguido ${obtained.toLowerCase()}! Ahora sueñas con ${nextName.toLowerCase()}`,
+            2200,
+          );
+        }
       }
     } else {
       // Game over: freeze simulation but keep the camera live so the
@@ -344,6 +612,16 @@ async function boot() {
       hud.setBalance(balance.normalizedTilt);
     }
 
+    // Multiplayer: ship our pose (rate-limited to 20 Hz internally),
+    // then advance remote-player interpolation so their visuals catch
+    // up to the latest network state. Both no-op when offline.
+    multi.sendPose({
+      x: player.group.position.x,
+      z: player.group.position.z,
+      yaw: player.result.facing,
+    });
+    remotePlayers?.update(dt);
+
     // Minimap reflects whatever state we ended this frame in (playing or
     // frozen), so the radar is still informative on game-over screens.
     minimap.render({
@@ -353,9 +631,11 @@ async function boot() {
       goal: { x: level.goal.x, z: level.goal.z },
       spawn: { x: level.spawn.x, z: level.spawn.z },
       obstacles: level.obstacles,
+      remotes: remotePlayers?.positions(),
     });
 
     renderer.render(scene, camera);
+    dreamPreview.render(dt);
   });
 }
 

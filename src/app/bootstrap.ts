@@ -23,7 +23,7 @@ export function createBootstrap(canvas: HTMLCanvasElement): Bootstrap {
   // Daylight-ish placeholder (matches the mean tone of our HDRI) so the sky
   // still reads well during the brief window before installHdriSky resolves.
   scene.background = new THREE.Color(0xa7c3d9);
-  scene.fog = new THREE.Fog(0xc7d8e5, 60, 180);
+  scene.fog = new THREE.Fog(0xc7d8e5, 40, 100);
 
   const camera = new THREE.PerspectiveCamera(
     60,

@@ -4,6 +4,8 @@
   --accent: #f1d28d;
   --warn: #f29179;
   --bg-panel: rgba(10, 10, 18, 0.35);
+  --font-mono: 'DM Mono', ui-monospace, 'Cascadia Code', monospace;
+  --font-cheat: 'Bungee', 'Impact', Haettenschweiler, 'Arial Narrow Bold', sans-serif;
 }
 
 * {
@@ -70,45 +72,173 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-#hud-top-left,
-#hud-top-center,
-#hud-top-right {
+/* Left: conexión · cronómetro · leche (un solo panel). */
+#hud-left-column {
   position: absolute;
-  top: 1.25rem;
-  padding: 0.75rem 1rem;
+  top: 1rem;
+  left: 1rem;
+  z-index: 3;
+}
+
+.hud-left-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.55rem;
+  max-width: 12.5rem;
+  padding: 0.65rem 0.85rem 0.75rem;
+  border-radius: 0.55rem;
   background: var(--bg-panel);
-  backdrop-filter: blur(6px);
-  border-radius: 0.5rem;
-  min-width: 9rem;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(247, 244, 236, 0.14);
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-#hud-top-left {
-  left: 1.25rem;
-  /* Wide panel so the balance bar reads as a long horizontal meter. */
-  min-width: 17rem;
+#hud-time-block .hud-value {
+  font-size: 1.85rem;
+  line-height: 1.1;
 }
 
-#hud-top-center {
+#hud-milk-block {
+  width: 100%;
+}
+
+.hud-milk-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.25rem 0.6rem;
+  width: 100%;
+}
+
+.hud-milk-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.hud-milk-value-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.hud-milk-stat .hud-value {
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.hud-milk-icon-sm {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: block;
+  opacity: 0.92;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.35));
+}
+
+.hud-label-tight {
+  margin-bottom: 0.1rem;
+}
+
+/* DEBUG_INVINCIBLE: etiqueta tipo “cheat code”, sin copy largo. */
+.hud-playtest-hint {
+  margin: 0.15rem 0 0;
+  padding: 0.4rem 0 0;
+  border-top: 1px solid rgba(255, 65, 92, 0.28);
+  max-width: none;
+  align-self: stretch;
+  text-align: center;
+  font-family: var(--font-cheat);
+  font-size: 0.78rem;
+  font-weight: 400;
+  font-style: normal;
+  letter-spacing: 0.06em;
+  line-height: 1.15;
+  color: #ff415c;
+  text-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.45),
+    0 0 16px rgba(255, 65, 92, 0.55);
+}
+
+.hud-playtest-hint.hidden {
+  display: none;
+}
+
+/* Center: bar on top; label + % on one row below. */
+#hud-balance-center {
+  position: absolute;
+  top: 1.35rem;
   left: 50%;
   transform: translateX(-50%);
+  z-index: 2;
+  width: min(560px, 52vw);
   text-align: center;
-  min-width: 7rem;
+  padding: 0;
+  background: none;
+  backdrop-filter: none;
 }
 
-#hud-top-right {
-  right: 1.25rem;
-  text-align: right;
-  min-width: 12rem;
+#balance-bar-track {
+  margin-top: 0;
+  height: 10px;
+  width: 100%;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.35),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  overflow: hidden;
 }
 
-/* Circular radar placed under the top-right panel. Height of that panel
-   is ~6rem; start 0.75rem below it so there's breathing room. */
-#minimap-wrap {
+#balance-bar-footer {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.65rem;
+  margin-top: 0.4rem;
+}
+
+#balance-label {
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+#spill-value {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Right column: radar (distancia dentro del círculo) → preview del sueño. */
+#hud-right-stack {
   position: absolute;
-  top: 8.25rem;
+  top: 1.25rem;
   right: 1.25rem;
+  z-index: 3;
+  width: 130px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+
+#minimap-wrap {
+  position: relative;
   width: 130px;
   height: 130px;
+  flex-shrink: 0;
   border-radius: 50%;
   background: var(--bg-panel);
   backdrop-filter: blur(6px);
@@ -117,31 +247,61 @@ body {
   overflow: hidden;
 }
 
+/* Distancia integrada en el radar (lectura tipo “instrumento”). */
+.minimap-distance-overlay {
+  position: absolute;
+  left: 50%;
+  bottom: 7px;
+  transform: translateX(-50%);
+  z-index: 2;
+  padding: 2px 9px 3px;
+  border-radius: 999px;
+  background: rgba(8, 8, 14, 0.62);
+  border: 1px solid rgba(247, 244, 236, 0.12);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+#minimap-distance .distance-num {
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: rgba(247, 244, 236, 0.95);
+}
+
+#minimap-distance .distance-unit {
+  margin-left: 0.12em;
+  font-weight: 400;
+  font-size: 0.68em;
+  letter-spacing: 0.1em;
+  color: rgba(247, 244, 236, 0.45);
+}
+
+#hud-dream-wrap {
+  width: 100%;
+  margin-top: 0.4rem;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+#dream-preview-canvas {
+  width: 100px;
+  height: 100px;
+  max-width: 100%;
+  display: block;
+  border-radius: 0.35rem;
+  filter: drop-shadow(0 3px 10px rgba(0, 0, 0, 0.45));
+}
+
 #minimap {
   display: block;
   width: 100%;
   height: 100%;
-}
-
-.hud-panel-row {
-  display: flex;
-  gap: 1.25rem;
-  justify-content: flex-end;
-  margin-bottom: 0.5rem;
-}
-
-.hud-panel-row > div {
-  text-align: right;
-}
-
-.hud-label-inline {
-  margin-top: 0.25rem;
-  margin-bottom: 0.15rem;
-}
-
-.hud-value-sm {
-  font-size: 1rem;
-  font-weight: 500;
 }
 
 #timer-value.low {
@@ -162,20 +322,15 @@ body {
   letter-spacing: 0.02em;
 }
 
-.hud-bar {
-  margin-top: 0.5rem;
-  height: 5px;
-  width: 100%;
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
 #spill-bar {
   height: 100%;
   width: 0%;
+  border-radius: 999px;
   background: var(--accent);
-  transition: background-color 120ms ease;
+  transition:
+    width 80ms ease-out,
+    background-color 120ms ease;
+  box-shadow: 0 0 12px rgba(241, 210, 141, 0.35);
 }
 
 #hud-center {
@@ -216,7 +371,7 @@ body {
 
 #toast {
   position: absolute;
-  top: 6.5rem;
+  top: 7.25rem;
   left: 50%;
   transform: translateX(-50%) translateY(-0.5rem);
   padding: 0.6rem 1.1rem;
@@ -249,4 +404,190 @@ body {
 
 #hint.hidden {
   opacity: 0;
+}
+
+/*
+ * Estado de red — fila simple: solo punto verde + nombre en online (sin “pill”).
+ */
+.net-badge {
+  position: static;
+  display: flex;
+  align-self: center;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.03em;
+  color: rgba(247, 244, 236, 0.5);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  transition: color 240ms ease;
+}
+
+.net-badge__dot {
+  display: none;
+  flex-shrink: 0;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+}
+
+.net-badge--connecting .net-badge__dot,
+.net-badge--online .net-badge__dot {
+  display: block;
+}
+
+.net-badge--idle,
+.net-badge--offline {
+  color: rgba(247, 244, 236, 0.48);
+}
+
+.net-badge--connecting {
+  color: rgba(241, 210, 141, 0.85);
+}
+
+.net-badge--connecting .net-badge__dot {
+  background: #f1d28d;
+  box-shadow: 0 0 10px rgba(241, 210, 141, 0.65);
+  animation: net-badge-pulse 1.2s ease-in-out infinite;
+}
+
+.net-badge--online {
+  color: rgba(247, 244, 236, 0.82);
+}
+
+.net-badge--online .net-badge__dot {
+  background: #6fdd8a;
+  box-shadow:
+    0 0 10px rgba(111, 221, 138, 0.9),
+    0 0 2px rgba(20, 40, 30, 0.9);
+}
+
+@keyframes net-badge-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/*
+ * Scoreboard overlay — shown during the 'scoreboard' phase between
+ * rounds in multiplayer. Centered card on top of the existing HUD,
+ * non-blocking for inputs (we still want WASD to register so the next
+ * round starts with the player already moving if they want to).
+ */
+.scoreboard {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: rgba(10, 10, 18, 0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  transition:
+    opacity 220ms ease,
+    visibility 220ms ease;
+}
+
+.scoreboard.hidden {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.scoreboard__panel {
+  min-width: 18rem;
+  max-width: 28rem;
+  padding: 1.4rem 1.6rem 1.6rem;
+  border-radius: 0.8rem;
+  background: rgba(10, 10, 18, 0.72);
+  border: 1px solid rgba(247, 244, 236, 0.12);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  text-align: left;
+}
+
+.scoreboard__title {
+  font-family: var(--font-cheat);
+  font-size: 1.5rem;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  text-align: center;
+  margin-bottom: 0.2rem;
+}
+
+.scoreboard__subtitle {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  text-align: center;
+  color: var(--fg-dim);
+  margin-bottom: 0.9rem;
+  letter-spacing: 0.04em;
+}
+
+.scoreboard__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  color: var(--fg);
+}
+
+.scoreboard__list li {
+  display: grid;
+  grid-template-columns: 1.4rem 0.7rem 1fr auto;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.32rem 0.1rem;
+  border-bottom: 1px solid rgba(247, 244, 236, 0.06);
+}
+
+.scoreboard__list li:last-child {
+  border-bottom: none;
+}
+
+.scoreboard__rank {
+  color: var(--fg-dim);
+  font-size: 0.85rem;
+  text-align: right;
+}
+
+.scoreboard__dot {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
+}
+
+.scoreboard__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scoreboard__name--self {
+  color: var(--accent);
+}
+
+.scoreboard__deliveries {
+  color: var(--fg-dim);
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.scoreboard__deliveries strong {
+  color: var(--fg);
+  font-weight: 500;
+  margin-right: 0.25rem;
 }

@@ -112,6 +112,11 @@ export interface JugBalanceConfig {
    * this is what makes late-game runs feel like carrying a loose cántaro.
    */
   correctionScale?: number;
+  /**
+   * When true, tilt is clamped at the spill threshold instead of failing.
+   * For playtesting levels without game-over on spill.
+   */
+  invincible?: boolean;
 }
 
 export interface JugBalance {
@@ -139,6 +144,7 @@ export function createJugBalance(initial: JugBalanceConfig = {}): JugBalance {
   let dampingScale = initial.dampingScale ?? 1;
   let spillThresholdScale = initial.spillThresholdScale ?? 1;
   let correctionScale = initial.correctionScale ?? 1;
+  let invincible = initial.invincible ?? false;
 
   function effectiveMaxTilt() {
     return MAX_TILT * spillThresholdScale;
@@ -202,7 +208,17 @@ export function createJugBalance(initial: JugBalanceConfig = {}): JugBalance {
       tiltForward += velForward * dt;
       tiltRight += velRight * dt;
 
-      if (Math.hypot(tiltForward, tiltRight) >= effectiveMaxTilt()) {
+      const mag = Math.hypot(tiltForward, tiltRight);
+      const maxT = effectiveMaxTilt();
+      if (invincible) {
+        if (mag > maxT) {
+          const s = maxT / mag;
+          tiltForward *= s;
+          tiltRight *= s;
+          velForward *= s;
+          velRight *= s;
+        }
+      } else if (mag >= maxT) {
         spilled = true;
       }
     },
@@ -222,6 +238,7 @@ export function createJugBalance(initial: JugBalanceConfig = {}): JugBalance {
         spillThresholdScale = config.spillThresholdScale;
       if (config.correctionScale !== undefined)
         correctionScale = config.correctionScale;
+      if (config.invincible !== undefined) invincible = config.invincible;
     },
   };
 }

@@ -19,6 +19,14 @@ const SIZE = 130;
 /** Inset from the edge where clamped off-screen arrows are drawn. */
 const EDGE_INSET = 8;
 
+export interface MinimapRemote {
+  /** World position of the remote player. */
+  x: number;
+  z: number;
+  /** HSL hue in [0, 1) — drives the dot colour. */
+  hue: number;
+}
+
 export interface MinimapState {
   playerX: number;
   playerZ: number;
@@ -27,6 +35,8 @@ export interface MinimapState {
   goal: { x: number; z: number };
   spawn: { x: number; z: number };
   obstacles: readonly Obstacle[];
+  /** Optional remote players to draw as colored dots. */
+  remotes?: readonly MinimapRemote[];
 }
 
 export interface Minimap {
@@ -84,6 +94,30 @@ export function createMinimap(canvas: HTMLCanvasElement): Minimap {
     ctx!.beginPath();
     ctx!.arc(spawnDx, spawnDz, 4, 0, Math.PI * 2);
     ctx!.stroke();
+
+    // Remote players: filled dots in the same color the world uses for
+    // their avatar / name tag. Outside-radius remotes are clamped to the
+    // edge so they still hint at "they're over there" instead of vanishing.
+    if (state.remotes && state.remotes.length > 0) {
+      const edgePx = SIZE / 2 - EDGE_INSET;
+      for (const remote of state.remotes) {
+        const rdx = (remote.x - state.playerX) * metresToPx;
+        const rdz = (remote.z - state.playerZ) * metresToPx;
+        const dist = Math.hypot(rdx, rdz);
+        const inside = dist <= edgePx;
+        const drawX = inside ? rdx : (rdx / (dist || 1)) * edgePx;
+        const drawZ = inside ? rdz : (rdz / (dist || 1)) * edgePx;
+        const fill = `hsla(${(remote.hue * 360).toFixed(0)}, 65%, 60%, ${inside ? 0.95 : 0.7})`;
+        const stroke = `hsla(${(remote.hue * 360).toFixed(0)}, 70%, 25%, 0.9)`;
+        ctx!.fillStyle = fill;
+        ctx!.strokeStyle = stroke;
+        ctx!.lineWidth = 1;
+        ctx!.beginPath();
+        ctx!.arc(drawX, drawZ, inside ? 3.2 : 2.5, 0, Math.PI * 2);
+        ctx!.fill();
+        ctx!.stroke();
+      }
+    }
 
     // Goal: filled dot with a soft halo when in range; clamped arrow at
     // the radar edge otherwise. The arrow rotation pins its tip to the

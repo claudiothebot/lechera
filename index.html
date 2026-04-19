@@ -1,9 +1,15 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Milk Dreams — v0</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bungee&family=DM+Mono:ital,wght@0,400;0,500&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/src/ui/styles.css" />
   </head>
   <body>
@@ -11,36 +17,87 @@
       <div id="loading-screen" aria-live="polite">Cargando…</div>
       <canvas id="game"></canvas>
       <div id="hud">
-        <div id="hud-top-left">
-          <div class="hud-label">SPILL</div>
-          <div id="spill-value" class="hud-value">0%</div>
-          <div class="hud-bar"><div id="spill-bar"></div></div>
-        </div>
-        <div id="hud-top-center">
-          <div class="hud-label">TIEMPO</div>
-          <div id="timer-value" class="hud-value">3:00</div>
-        </div>
-        <div id="hud-top-right">
-          <div class="hud-panel-row">
-            <div>
-              <div class="hud-label">LECHE</div>
-              <div id="litres-value" class="hud-value">1 L</div>
+        <div id="hud-left-column">
+          <div class="hud-left-card">
+            <div id="net-badge" class="net-badge net-badge--idle" aria-live="polite">
+              <span class="net-badge__dot" aria-hidden="true"></span>
+              <span class="net-badge__text">Local</span>
             </div>
-            <div>
-              <div class="hud-label">SUEÑO</div>
-              <div id="dream-value" class="hud-value hud-value-sm">—</div>
+            <div id="hud-time-block" aria-label="Tiempo restante">
+              <div id="timer-value" class="hud-value">3:00</div>
+            </div>
+            <div id="hud-milk-block">
+              <div class="hud-milk-grid" role="group" aria-label="Leche">
+                <div class="hud-milk-stat">
+                  <span class="hud-label hud-label-tight">Ahora</span>
+                  <div class="hud-milk-value-row">
+                    <img
+                      class="hud-milk-icon-sm"
+                      src="/assets/milk-jug.svg"
+                      width="20"
+                      height="20"
+                      alt=""
+                    />
+                    <span id="litres-carrying" class="hud-value">1 L</span>
+                  </div>
+                </div>
+                <div class="hud-milk-stat">
+                  <span class="hud-label hud-label-tight">Dejado</span>
+                  <div class="hud-milk-value-row">
+                    <img
+                      class="hud-milk-icon-sm"
+                      src="/assets/milk-jug.svg"
+                      width="20"
+                      height="20"
+                      alt=""
+                    />
+                    <span id="litres-delivered" class="hud-value">0 L</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p id="debug-playtest-hint" class="hud-playtest-hint hidden" aria-hidden="true">
+              INVENCIBLE
+            </p>
+          </div>
+        </div>
+
+        <div id="hud-balance-center">
+          <div id="balance-bar-track">
+            <div id="spill-bar"></div>
+          </div>
+          <div id="balance-bar-footer">
+            <span id="balance-label">Balance</span>
+            <span id="spill-value">0%</span>
+          </div>
+        </div>
+
+        <div id="hud-right-stack">
+          <div id="minimap-wrap" title="Radar · distancia a la meta">
+            <canvas id="minimap"></canvas>
+            <div id="minimap-distance" class="minimap-distance-overlay" aria-label="Distancia a la meta">
+              <span class="distance-num">—</span><span class="distance-unit">m</span>
             </div>
           </div>
-          <div class="hud-label hud-label-inline">DISTANCIA</div>
-          <div id="distance-value" class="hud-value hud-value-sm">— m</div>
+          <div id="hud-dream-wrap" role="img" aria-label="">
+            <canvas id="dream-preview-canvas" width="120" height="120"></canvas>
+          </div>
         </div>
-        <div id="minimap-wrap">
-          <canvas id="minimap"></canvas>
-        </div>
+
         <div id="toast"></div>
         <div id="hud-center">
           <div id="message"></div>
           <div id="hint">W/S move — A/D turn — Arrows balance the jug — Hold left mouse to look around — R restart</div>
+        </div>
+
+        <div id="scoreboard" class="scoreboard hidden" aria-hidden="true">
+          <div class="scoreboard__panel">
+            <div class="scoreboard__title">Fin de la ronda</div>
+            <div class="scoreboard__subtitle">
+              Próxima en <span id="scoreboard-countdown">10</span>s
+            </div>
+            <ol id="scoreboard-list" class="scoreboard__list"></ol>
+          </div>
         </div>
       </div>
     </div>
