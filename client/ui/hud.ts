@@ -70,10 +70,19 @@ export interface Hud {
   /** Shows the invincibility line when `DEBUG_INVINCIBLE` is on. */
   setDebugInvincible(visible: boolean): void;
   /**
-   * Update the multiplayer status badge. `selfName` is the server-
-   * assigned display name (e.g. "Player 7"), or null if unknown.
+   * Update the multiplayer status badge. `selfName` is the player's
+   * chosen display name (or null if unknown). `selfHue` is the
+   * server-assigned color hue in [0, 1) — when present, the name is
+   * tinted to match the in-world Lechera body so the player's
+   * identity reads at a glance from the HUD too. Pass `null` for
+   * hue to fall back to the default fg color (used while
+   * connecting / offline).
    */
-  setNetStatus(status: NetStatus, selfName: string | null): void;
+  setNetStatus(
+    status: NetStatus,
+    selfName: string | null,
+    selfHue?: number | null,
+  ): void;
   /**
    * Show the round-end scoreboard with the given entries (already
    * sorted, top first). `secondsLeft` shows the countdown to the next
@@ -137,6 +146,7 @@ export function createHud(): Hud {
   let toastTimer: number | null = null;
   let lastNetStatus: NetStatus | null = null;
   let lastNetName: string | null = null;
+  let lastNetHue: number | null = null;
   let lastScoreboardCountdown = -1;
 
   const setBalance: Hud['setBalance'] = (normalizedTilt) => {
@@ -194,8 +204,8 @@ export function createHud(): Hud {
     if (carrying === lastCarrying && delivered === lastDelivered) return;
     lastCarrying = carrying;
     lastDelivered = delivered;
-    litresCarrying.textContent = `${carrying} L`;
-    litresDeliveredEl.textContent = `${delivered} L`;
+    litresCarrying.textContent = `${carrying}L`;
+    litresDeliveredEl.textContent = `${delivered}L`;
   };
 
   const setDreamLabel: Hud['setDreamLabel'] = (dreamName) => {
@@ -238,10 +248,18 @@ export function createHud(): Hud {
     playtestHint.setAttribute('aria-hidden', visible ? 'false' : 'true');
   };
 
-  const setNetStatus: Hud['setNetStatus'] = (status, selfName) => {
-    if (status === lastNetStatus && selfName === lastNetName) return;
+  const setNetStatus: Hud['setNetStatus'] = (status, selfName, selfHue) => {
+    const hue = selfHue ?? null;
+    if (
+      status === lastNetStatus &&
+      selfName === lastNetName &&
+      hue === lastNetHue
+    ) {
+      return;
+    }
     lastNetStatus = status;
     lastNetName = selfName;
+    lastNetHue = hue;
     netBadge.classList.remove(
       'net-badge--idle',
       'net-badge--connecting',
@@ -264,6 +282,17 @@ export function createHud(): Hud {
       case 'offline':
         netBadgeText.textContent = 'Local';
         break;
+    }
+    // Tint the name when we know which hue the server assigned us.
+    // Same HSL formula as the in-world tint (see remotePlayers.ts) so
+    // the colour reads as "this is YOUR lechera" everywhere it shows.
+    if (status === 'online' && hue !== null) {
+      const css = `hsl(${(hue * 360).toFixed(0)} 70% 72%)`;
+      netBadgeText.style.color = css;
+      netBadge.style.setProperty('--net-badge-accent', css);
+    } else {
+      netBadgeText.style.removeProperty('color');
+      netBadge.style.removeProperty('--net-badge-accent');
     }
   };
 

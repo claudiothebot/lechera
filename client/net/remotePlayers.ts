@@ -337,8 +337,23 @@ function disposeAvatar(avatar: RemoteAvatar): void {
 // Name tag (canvas → CanvasTexture → SpriteMaterial)
 // -----------------------------------------------------------------------------
 
-const NAME_TAG_PX_WIDTH = 256;
+/**
+ * Canvas resolution for the floating name tag. 320 × 64 comfortably
+ * holds the longest allowed name (18 chars from
+ * `MAX_NAME_LENGTH` × ~14 px per glyph at the base 28 px font ≈
+ * 250 px) with breathing room for accents / wider glyphs. We still
+ * auto-shrink the font in `drawNameToCanvas` for pathological cases
+ * (e.g. all wide characters), but the wider canvas means the
+ * shrink rarely kicks in in practice.
+ */
+const NAME_TAG_PX_WIDTH = 320;
 const NAME_TAG_PX_HEIGHT = 64;
+/** Inner horizontal padding the text must NEVER cross (matches the pill stroke). */
+const NAME_TAG_PADDING_PX = 18;
+/** Base / max font size. We shrink from here until the text fits. */
+const NAME_TAG_BASE_FONT_PX = 28;
+/** Lower bound — below this the text is unreadable, just clip. */
+const NAME_TAG_MIN_FONT_PX = 16;
 
 function createNameTag(
   name: string,
@@ -399,7 +414,22 @@ function drawNameToCanvas(
   ctx.stroke();
 
   ctx.fillStyle = '#fdfaf2';
-  ctx.font = '600 28px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  // Auto-shrink the font so long names (up to MAX_NAME_LENGTH from
+  // the shared name module) never overflow the pill. We start at the
+  // base size and step down 2 px at a time until the rendered text
+  // fits within the safe inner width, bounded below so unreadable
+  // tags still render at the minimum size (and clip).
+  const safeWidth = w - NAME_TAG_PADDING_PX * 2;
+  let fontPx = NAME_TAG_BASE_FONT_PX;
+  while (fontPx > NAME_TAG_MIN_FONT_PX) {
+    ctx.font = `600 ${fontPx}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    if (ctx.measureText(name).width <= safeWidth) break;
+    fontPx -= 2;
+  }
+  // Final assignment guards the case where we exited the loop at
+  // exactly NAME_TAG_MIN_FONT_PX (the loop body sets `font` before
+  // the check, but only when the previous size didn't fit).
+  ctx.font = `600 ${fontPx}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(name, w / 2, h / 2);

@@ -207,16 +207,33 @@ export function createPlayer(scene: THREE.Scene, spawn: THREE.Vector3): Player {
         const push = PLAYER_RADIUS - dist;
         next.x += nx * push;
         next.z += nz * push;
+
+        // Player-frame velocity component INTO the obstacle. Used to
+        // kill our own velocity along the contact normal — only WE
+        // ever move under our own control on this client, so the
+        // velocity correction always uses our absolute velocity.
         const vn = velocity.x * nx + velocity.z * nz;
         if (vn < 0) {
-          const lost = -vn;
           velocity.x -= vn * nx;
           velocity.z -= vn * nz;
-          if (lost > 0.3) {
-            // Bump direction matches the player's incoming motion (into the
-            // wall), which is where the jug's inertia wants to send it.
-            bumps.push({ impulse: lost, dirX: -nx, dirZ: -nz });
-          }
+        }
+
+        // Bump intensity is driven by the RELATIVE velocity at the
+        // contact point. For a static obstacle (default vel = 0)
+        // this collapses to `vn` — no behaviour change. For a moving
+        // obstacle (a remote player ramming into us) it captures the
+        // closing speed even when we're stationary, so the jug
+        // shakes on both sides of a player ↔ player collision.
+        const obVelX = ob.velocityX ?? 0;
+        const obVelZ = ob.velocityZ ?? 0;
+        const vrelN =
+          (velocity.x - obVelX) * nx + (velocity.z - obVelZ) * nz;
+        if (vrelN < -0.3) {
+          // Bump direction matches the impact axis (`-n` points from
+          // the contact point INTO the obstacle, which is where the
+          // jug's inertia wants to lag behind on the player taking
+          // the hit). Magnitude scales with closing speed.
+          bumps.push({ impulse: -vrelN, dirX: -nx, dirZ: -nz });
         }
       }
     }

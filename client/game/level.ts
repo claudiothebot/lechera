@@ -56,6 +56,16 @@ export interface Obstacle {
   /** Half height for visual only (collision is 2D on XZ). */
   halfY: number;
   /**
+   * Optional world-space horizontal velocity (m/s). Defaults to 0
+   * (static obstacle). Used by the player collision to compute the
+   * RELATIVE velocity at impact so a moving obstacle (e.g. a remote
+   * player ramming into us) produces a jug bump even when we're
+   * standing still — symmetric "I bumped you / you bumped me"
+   * behaviour without any extra round-trip.
+   */
+  velocityX?: number;
+  velocityZ?: number;
+  /**
    * Visual mesh/group parented under `level.group`. Starts as a
    * placeholder box; `loadLevelHouses` swaps it for a house model
    * once the GLB resolves.

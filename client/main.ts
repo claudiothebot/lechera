@@ -378,6 +378,31 @@ async function boot() {
    */
   const remoteObstacleVisual = new THREE.Group();
   remoteObstacleVisual.name = 'remote-obstacle-shell';
+  /**
+   * Per-session velocity tracker for remote players. We need each
+   * remote's world-space velocity to feed `Obstacle.velocityX/Z` so
+   * the player↔player collision in `player.ts` can fire a bump on
+   * the SIDE THAT GETS HIT (otherwise only the rammer feels it).
+   *
+   * Pose patches arrive at 20 Hz but we render at 60 Hz, so a naive
+   * "(curr - prev) / dt" derivative is 0 for ~2 of every 3 frames
+   * and spikes on the third. Instead we measure the delta between
+   * actual position changes and hold that velocity until the next
+   * change. After 200 ms of no movement we collapse it to 0 so a
+   * remote that stopped moving doesn't keep reporting their last
+   * walk velocity for ever.
+   */
+  interface RemoteVelocityEntry {
+    prevX: number;
+    prevZ: number;
+    velX: number;
+    velZ: number;
+    /** `performance.now()` of the most recent x/z change. */
+    lastChangeMs: number;
+  }
+  const remoteVelocityCache = new Map<string, RemoteVelocityEntry>();
+  /** Idle threshold after which a remote's tracked velocity decays to 0. */
+  const REMOTE_VEL_IDLE_MS = 200;
   let serverRoundLive = false;
   let lastServerPhase: 'playing' | 'scoreboard' | null = null;
 
@@ -541,12 +566,20 @@ async function boot() {
     connectMultiplayer({
       name: chosenName,
       onStatusChange: (status, name) => {
-        hud.setNetStatus(status, name);
+        // Hue isn't known yet at the first fire (self schema hasn't
+        // hydrated). Once the self view lands, the
+        // `subscribeSelfProgression` hook below re-fires with the
+        // tint so the HUD name picks up the player's colour.
+        hud.setNetStatus(status, name, multi.selfView()?.colorHue ?? null);
       },
     }),
   ).then((handle) => {
     multi = handle;
-    hud.setNetStatus(handle.status(), handle.selfName());
+    hud.setNetStatus(
+      handle.status(),
+      handle.selfName(),
+      handle.selfView()?.colorHue ?? null,
+    );
     // Phase 5 — capture the HTTP origin sibling of the WS endpoint so
     // `refreshLeaderboard` knows where to fetch the all-time top from.
     // We always set it (even when offline) because a future reconnect
@@ -597,6 +630,18 @@ async function boot() {
     // reparents flock animals, resets balance, etc).
     handle.subscribeSelfProgression({
       onChange: (snapshot) => {
+        // Refresh the HUD net badge with the current hue. The
+        // initial `setNetStatus` upstream may have fired before our
+        // self entry hydrated, in which case the hue was null and
+        // the name showed in the default fg colour. The HUD setter
+        // is idempotent (early-returns when status/name/hue all
+        // match the last call), so re-firing every snapshot is
+        // cheap.
+        hud.setNetStatus(
+          handle.status(),
+          handle.selfName(),
+          handle.selfView()?.colorHue ?? null,
+        );
         // First fire: take over from local progression.
         if (!serverProgressionLive) {
           serverProgressionLive = true;
@@ -743,8 +788,9 @@ async function boot() {
       frameObstacles.length = 0;
       for (const ob of level.obstacles) frameObstacles.push(ob);
       const remotes = multi.remotePlayers();
+      const nowMs = performance.now();
       let remoteIdx = 0;
-      remotes.forEach((view) => {
+      remotes.forEach((view, sessionId) => {
         let entry = remoteObstaclePool[remoteIdx];
         if (!entry) {
           entry = {
@@ -752,14 +798,54 @@ async function boot() {
             halfX: PLAYER_RADIUS,
             halfZ: PLAYER_RADIUS,
             halfY: 0.7,
+            velocityX: 0,
+            velocityZ: 0,
             visual: remoteObstacleVisual,
           };
           remoteObstaclePool[remoteIdx] = entry;
         }
         entry.center.set(view.x, 0, view.z);
+
+        // Update / read the per-session velocity tracker. Velocity is
+        // sampled across actual position changes (not per-frame
+        // deltas) so the result is stable between 20 Hz patches.
+        let velEntry = remoteVelocityCache.get(sessionId);
+        if (!velEntry) {
+          velEntry = {
+            prevX: view.x,
+            prevZ: view.z,
+            velX: 0,
+            velZ: 0,
+            lastChangeMs: nowMs,
+          };
+          remoteVelocityCache.set(sessionId, velEntry);
+        } else if (view.x !== velEntry.prevX || view.z !== velEntry.prevZ) {
+          // Clamp the time window to a sensible minimum (10 ms) to
+          // avoid huge spikes when patches happen to arrive very
+          // close together.
+          const elapsedSec = Math.max(0.01, (nowMs - velEntry.lastChangeMs) / 1000);
+          velEntry.velX = (view.x - velEntry.prevX) / elapsedSec;
+          velEntry.velZ = (view.z - velEntry.prevZ) / elapsedSec;
+          velEntry.prevX = view.x;
+          velEntry.prevZ = view.z;
+          velEntry.lastChangeMs = nowMs;
+        } else if (nowMs - velEntry.lastChangeMs > REMOTE_VEL_IDLE_MS) {
+          velEntry.velX = 0;
+          velEntry.velZ = 0;
+        }
+        entry.velocityX = velEntry.velX;
+        entry.velocityZ = velEntry.velZ;
+
         frameObstacles.push(entry);
         remoteIdx += 1;
       });
+      // Drop tracker entries for remotes that left the room so the
+      // map doesn't grow unboundedly across long sessions.
+      if (remoteVelocityCache.size > remotes.size) {
+        for (const sessionId of remoteVelocityCache.keys()) {
+          if (!remotes.has(sessionId)) remoteVelocityCache.delete(sessionId);
+        }
+      }
 
       const r = player.update(
         dt,

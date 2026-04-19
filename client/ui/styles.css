@@ -148,23 +148,25 @@ body {
 
 .hud-milk-row__meta {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 0.35rem;
   min-width: 0;
   flex: 1;
 }
 
 .hud-milk-row__meta .hud-label {
-  font-size: 0.62rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  text-transform: none;
   color: var(--fg-dim);
   line-height: 1;
+  margin-bottom: 0;
 }
 
 .hud-milk-row__meta .hud-value--milk {
-  margin-top: -0.22rem;
+  margin-top: 0;
 }
 
 .hud-milk-row--carry .hud-milk-row__meta .hud-label {
@@ -479,7 +481,7 @@ body {
   align-self: flex-start;
   align-items: center;
   justify-content: flex-start;
-  gap: 0.45rem;
+  gap: 0.5rem;
   padding: 0;
   margin: 0;
   border: none;
@@ -493,11 +495,30 @@ body {
   transition: color 240ms ease;
 }
 
+.net-badge__text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 11rem;
+}
+
+.net-badge--online .net-badge__text {
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial,
+    sans-serif;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.55),
+    0 0 8px rgba(0, 0, 0, 0.35);
+}
+
 .net-badge__dot {
   display: none;
   flex-shrink: 0;
-  width: 0.45rem;
-  height: 0.45rem;
+  width: 0.55rem;
+  height: 0.55rem;
   border-radius: 50%;
 }
 
@@ -526,9 +547,11 @@ body {
 }
 
 .net-badge--online .net-badge__dot {
-  background: #6fdd8a;
+  /* Defaults to the friendly green; per-player tint (set inline by
+   * `setNetStatus`) overrides this once the server-assigned hue lands. */
+  background: var(--net-badge-accent, #6fdd8a);
   box-shadow:
-    0 0 10px rgba(111, 221, 138, 0.9),
+    0 0 10px var(--net-badge-accent, rgba(111, 221, 138, 0.9)),
     0 0 2px rgba(20, 40, 30, 0.9);
 }
 
