@@ -1,5 +1,9 @@
 import * as THREE from 'three';
-import type { Obstacle } from './level';
+import {
+  WORLD_BOUNDARY_CENTER,
+  WORLD_BOUNDARY_RADIUS_M,
+  type Obstacle,
+} from './level';
 
 /**
  * Half-width of the cylindrical body used for collision against world
@@ -235,6 +239,31 @@ export function createPlayer(scene: THREE.Scene, spawn: THREE.Vector3): Player {
           // the hit). Magnitude scales with closing speed.
           bumps.push({ impulse: -vrelN, dirX: -nx, dirZ: -nz });
         }
+      }
+    }
+
+    // Hard world boundary: keep the player inside the playable disc
+    // around `WORLD_BOUNDARY_CENTER`. Trees / horizon scenery sit at and
+    // past this radius (`loadLevelTrees`), so visually the player is
+    // walled in by the forest. Clamp BEFORE writing `group.position` so
+    // the next-frame collision pass sees the clamped position too.
+    const bx = next.x - WORLD_BOUNDARY_CENTER.x;
+    const bz = next.z - WORLD_BOUNDARY_CENTER.y;
+    const bdist = Math.hypot(bx, bz);
+    const maxR = WORLD_BOUNDARY_RADIUS_M - PLAYER_RADIUS;
+    if (bdist > maxR) {
+      // Project back onto the boundary circle. Also kill the radial
+      // component of velocity so we don't accumulate "trying to push
+      // through the wall" energy frame after frame.
+      const k = maxR / bdist;
+      next.x = WORLD_BOUNDARY_CENTER.x + bx * k;
+      next.z = WORLD_BOUNDARY_CENTER.y + bz * k;
+      const nrx = bx / bdist;
+      const nrz = bz / bdist;
+      const vRadial = velocity.x * nrx + velocity.z * nrz;
+      if (vRadial > 0) {
+        velocity.x -= vRadial * nrx;
+        velocity.z -= vRadial * nrz;
       }
     }
 

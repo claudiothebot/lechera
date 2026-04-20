@@ -34,7 +34,11 @@ const OFFSET_DECAY_LAMBDA = 5.0;
 const MOUSE_SENSITIVITY = 0.0022;
 const MIN_PITCH = -0.25;
 const MAX_PITCH = 0.9;
-const DEFAULT_PITCH = 0.22;
+// Resting pitch was 0.22 (camera looked down ~27° at the player), which made
+// the framing ground-heavy and amplified the fog wedge along the horizon.
+// 0.14 lifts the chin to ~22° downcast — still a third-person follow, but
+// the upper third of the screen is sky during normal play.
+const DEFAULT_PITCH = 0.14;
 
 export interface CameraRig {
   /**

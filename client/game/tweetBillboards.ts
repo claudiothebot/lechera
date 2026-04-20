@@ -59,6 +59,11 @@ export interface TweetBillboardsOptions {
    * material between both meshes.
    */
   doubleSided?: boolean;
+  /**
+   * When false, the billboards render normally but pointer listeners are not
+   * installed. Useful for dev/editor previews that should not open tabs.
+   */
+  interactive?: boolean;
 }
 
 export interface TweetBillboardsManager {
@@ -147,6 +152,7 @@ export function createTweetBillboards(
     clickDragThresholdPx = 6,
     clickTimeThresholdMs = 400,
     doubleSided = true,
+    interactive = true,
   } = options;
 
   const group = new THREE.Group();
@@ -212,17 +218,23 @@ export function createTweetBillboards(
     window.open(tweet.url, '_blank', 'noopener,noreferrer');
   }
 
-  dom.addEventListener('pointerdown', onPointerDown);
-  dom.addEventListener('pointerup', onPointerUp);
-  dom.addEventListener('pointercancel', () => {
+  const onPointerCancel = () => {
     downButton = -1;
-  });
+  };
+  if (interactive) {
+    dom.addEventListener('pointerdown', onPointerDown);
+    dom.addEventListener('pointerup', onPointerUp);
+    dom.addEventListener('pointercancel', onPointerCancel);
+  }
 
   return {
     group,
     dispose() {
-      dom.removeEventListener('pointerdown', onPointerDown);
-      dom.removeEventListener('pointerup', onPointerUp);
+      if (interactive) {
+        dom.removeEventListener('pointerdown', onPointerDown);
+        dom.removeEventListener('pointerup', onPointerUp);
+        dom.removeEventListener('pointercancel', onPointerCancel);
+      }
       scene.remove(group);
       for (const entry of entries) {
         entry.geometry.dispose();

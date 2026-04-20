@@ -2,7 +2,12 @@ import * as THREE from 'three';
 import { createBootstrap } from './app/bootstrap';
 import { createResize } from './app/resize';
 import { createInputSystem } from './systems/input';
-import { createLevel, loadLevelHouses, loadLevelTextures } from './game/level';
+import {
+  createLevel,
+  loadLevelHouses,
+  loadLevelTextures,
+  loadLevelTrees,
+} from './game/level';
 import { createPlayer, PLAYER_RADIUS } from './game/player';
 import { createJugBalance, type BumpInput } from './game/jugBalance';
 import {
@@ -21,9 +26,9 @@ import { loadBillboardModel } from './game/billboardModel';
 import {
   buildBillboardCollisionObstacles,
   createTweetBillboards,
-  type TweetBillboardPlacement,
 } from './game/tweetBillboards';
 import { EXAMPLE_TWEETS } from './game/exampleTweets';
+import { DREAM_GOALS } from '@milk-dreams/shared';
 import { createProgression } from './game/progression';
 import { createCameraRig } from './render/cameraRig';
 import { installHdriSky } from './render/sky';
@@ -45,6 +50,8 @@ import {
 import type { AllTimeEntry, ScoreboardEntry } from './ui/hud';
 import { getOrAskPlayerName } from './ui/nameModal';
 import type { Obstacle } from './game/level';
+import { buildBillboardPlacements } from './game/billboardLayout';
+import { bootLevelEditor } from './editor/levelEditor';
 
 /** Jug: base height in metres and extra lift above the head anchor. */
 const JUG_TARGET_HEIGHT = 0.42;
@@ -105,100 +112,15 @@ function triangularLitresFor(index: number): number {
  */
 const YAW_INERTIA_GAIN = 15.0;
 
-/** Playtest: fewer billboards until tweet planes are optimized / instanced. */
-const BILLBOARD_TWEET_COUNT = 10;
-
-/**
- * Min centre distance in XZ between boards (~footprint + margin) so they
- * never spawn stacked.
- */
-const BILLBOARD_MIN_SPACING_M = 12;
-
-/** Deterministic 0..1 “noise” so scatter looks irregular but stable across reloads. */
-function billboardHash01(i: number, salt: number): number {
-  const t = Math.sin(i * 12.9898 + salt * 78.233 + BILLBOARD_TWEET_COUNT) * 43758.5453;
-  return t - Math.floor(t);
-}
-
-/**
- * Tweet boards scattered off the path with **non-overlap**: each new spot
- * must clear `BILLBOARD_MIN_SPACING_M` from all previous (greedy + retries).
- * Still a bit irregular via hash jitter; fallback ladder if retries exhaust.
- */
-function buildExampleTweetPlacements(): TweetBillboardPlacement[] {
-  const picks = EXAMPLE_TWEETS.slice(0, BILLBOARD_TWEET_COUNT);
-  const placed: THREE.Vector3[] = [];
-  const minSq = BILLBOARD_MIN_SPACING_M * BILLBOARD_MIN_SPACING_M;
-  const out: TweetBillboardPlacement[] = [];
-
-  for (let i = 0; i < picks.length; i++) {
-    const tweet = picks[i]!;
-    const pos = new THREE.Vector3();
-    let accepted = false;
-
-    for (let attempt = 0; attempt < 96; attempt++) {
-      const seed = i * 997 + attempt * 131;
-      const r0 = billboardHash01(seed, 0);
-      const r1 = billboardHash01(seed, 1);
-      const r2 = billboardHash01(seed, 2);
-      const side = r0 < 0.5 ? -1 : 1;
-      const x =
-        side * (8.5 + r1 * 10.5) + (billboardHash01(seed, 4) - 0.5) * 4.5;
-      const z =
-        18 -
-        i * 6.5 -
-        attempt * 0.035 +
-        (r2 - 0.5) * 4.5 +
-        Math.sin(seed * 0.061) * 3;
-
-      pos.set(
-        THREE.MathUtils.clamp(x, -42, 42),
-        0,
-        THREE.MathUtils.clamp(z, -40, 24),
-      );
-
-      if (placed.every((p) => pos.distanceToSquared(p) >= minSq)) {
-        placed.push(pos.clone());
-        accepted = true;
-        break;
-      }
-    }
-
-    if (!accepted) {
-      const side = i % 2 === 0 ? -1 : 1;
-      pos.set(side * 12.5, 0, 16 - i * 7.5);
-      let guard = 0;
-      while (
-        guard < 30 &&
-        placed.some((p) => pos.distanceToSquared(p) < minSq)
-      ) {
-        guard += 1;
-        pos.z -= 2.8;
-        pos.x += (billboardHash01(i + guard, 9) - 0.5) * 2;
-      }
-      if (placed.some((p) => pos.distanceToSquared(p) < minSq)) {
-        pos.z -= 18 + i * 2.5;
-      }
-      placed.push(pos.clone());
-    }
-
-    const sideFromX = pos.x < 0 ? -1 : 1;
-    const baseYaw = sideFromX < 0 ? 0 : Math.PI;
-    const yawJitter = (billboardHash01(i, 7) - 0.5) * 0.55;
-    const ang = baseYaw + yawJitter;
-    out.push({
-      position: pos.clone(),
-      facing: new THREE.Vector3(Math.cos(ang), 0, Math.sin(ang)),
-      tweet,
-    });
-  }
-
-  return out;
-}
-
 async function boot() {
   const canvas = document.querySelector<HTMLCanvasElement>('#game');
   if (!canvas) throw new Error('Canvas #game not found');
+
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('editor') === '1') {
+    await bootLevelEditor(canvas);
+    return;
+  }
 
   const { renderer, scene, camera } = createBootstrap(canvas);
   const resize = createResize(renderer, camera);
@@ -237,10 +159,22 @@ async function boot() {
   installHdriSky(
     renderer,
     scene,
-    '/hdri/kloofendal_48d_partly_cloudy_puresky_1k.hdr',
+    // ambientCG "Day Sky HDRI 001 B": stitched panorama with horizon
+    // clearing — a clean, slightly hazy blue daytime sky with soft cumulus
+    // clouds. EXR (OpenEXR) format; sky.ts auto-detects the loader by
+    // extension. Replaces Kloppenheim_06 which had a strong directional
+    // bright/dark split that read as inconsistent depending on yaw.
+    '/hdri/daysky_001b_2k.exr',
     {
-      backgroundIntensity: 0.75,
-      environmentIntensity: 0.45,
+      // Sky at full brightness; IBL kept moderate so the panorama doesn't
+      // over-light the milkmaid / props. Tune if shading looks blown out.
+      backgroundIntensity: 1.0,
+      environmentIntensity: 0.5,
+      // Most ambientCG sky panoramas are roughly omnidirectional (the
+      // technique notes "horizon clearing"), so no yaw is needed to find a
+      // "pretty side". Adjust if a particular cloud arrangement reads
+      // better in front of the camera.
+      yawRotation: 0,
     },
   ).catch((err) => {
     console.error('[sky] failed to load HDRI', err);
@@ -319,12 +253,28 @@ async function boot() {
       console.error('[animals] failed to load reward animals', err);
     });
 
-  // Roadside tweet-billboards (POC). Loaded async in the background so slow
-  // fetches never block gameplay. Stubs live here for the POC; swap for a
-  // real endpoint by replacing the array with a fetch result.
-  loadBillboardModel()
-    .then((billboardModel) => {
-      const placements = buildExampleTweetPlacements();
+  // World decoration + roadside tweet-billboards. Sequenced so billboards
+  // avoid trees: trees register themselves as obstacles in `loadLevelTrees`
+  // and billboard layout samples the level definition + current obstacle
+  // set to reject overlaps. Both phases are non-blocking — gameplay
+  // starts on the bare grass and pops in scenery / billboards as the
+  // GLBs resolve.
+  (async () => {
+    try {
+      await loadLevelTrees(level, DREAM_GOALS);
+    } catch (err) {
+      console.error('[trees] failed to scatter trees', err);
+    }
+
+    try {
+      const billboardModel = await loadBillboardModel();
+      const placements = buildBillboardPlacements(
+        level.definition,
+        level.obstacles,
+        DREAM_GOALS,
+        EXAMPLE_TWEETS,
+        { x: level.spawn.x, z: level.spawn.z },
+      );
       level.addObstacles(buildBillboardCollisionObstacles(billboardModel, placements));
       createTweetBillboards({
         scene,
@@ -333,10 +283,10 @@ async function boot() {
         billboard: billboardModel,
         placements,
       });
-    })
-    .catch((err) => {
+    } catch (err) {
       console.error('[billboards] failed to load billboard model', err);
-    });
+    }
+  })();
 
   const tiltAxis = new THREE.Vector3();
   const jugWorldPos = new THREE.Vector3();

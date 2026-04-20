@@ -36,6 +36,8 @@ export interface RoundContribution {
   litres: number;
 }
 
+const RPC_TIMEOUT_MS = Number(process.env.SUPABASE_RPC_TIMEOUT_MS ?? 1500);
+
 export interface LeaderboardStore {
   /**
    * `true` if the store is wired to a real Supabase project. Lets the
@@ -124,6 +126,24 @@ export function createLeaderboardStore(): LeaderboardStore {
   });
   console.log(`[persistence] leaderboard enabled at ${url}`);
 
+  async function withTimeout<T>(
+    label: string,
+    op: PromiseLike<T>,
+  ): Promise<T> {
+    return await Promise.race<T>([
+      Promise.resolve(op),
+      new Promise<T>((_, reject) => {
+        setTimeout(() => {
+          reject(
+            new Error(
+              `${label} timed out after ${RPC_TIMEOUT_MS}ms`,
+            ),
+          );
+        }, RPC_TIMEOUT_MS);
+      }),
+    ]);
+  }
+
   return {
     enabled: true,
     async recordRoundContributions(entries) {
@@ -135,10 +155,13 @@ export function createLeaderboardStore(): LeaderboardStore {
         const trimmed = entry.name.trim();
         if (!trimmed || entry.litres <= 0) continue;
         try {
-          const { error } = await client.rpc(
-            'record_contribution',
-            { p_name: trimmed, p_litres: entry.litres },
-            { get: false },
+          const { error } = await withTimeout(
+            `record_contribution(${trimmed})`,
+            client.rpc(
+              'record_contribution',
+              { p_name: trimmed, p_litres: entry.litres },
+              { get: false },
+            ),
           );
           if (error) {
             console.warn(
@@ -155,9 +178,12 @@ export function createLeaderboardStore(): LeaderboardStore {
     async topRankings(limit) {
       const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
       try {
-        const { data, error } = await client.rpc('top_rankings', {
-          p_limit: safeLimit,
-        });
+        const { data, error } = await withTimeout(
+          `top_rankings(${safeLimit})`,
+          client.rpc('top_rankings', {
+            p_limit: safeLimit,
+          }),
+        );
         if (error) {
           console.warn(`[persistence] top_rankings failed: ${error.message}`);
           return [];

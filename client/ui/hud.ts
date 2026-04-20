@@ -112,6 +112,7 @@ export interface Hud {
 
 export function createHud(): Hud {
   const spillValue = document.querySelector<HTMLElement>('#spill-value')!;
+  const balanceLabel = document.querySelector<HTMLElement>('#balance-label')!;
   const spillBar = document.querySelector<HTMLElement>('#spill-bar')!;
   const distanceValue = document.querySelector<HTMLElement>('#minimap-distance')!;
   const messageEl = document.querySelector<HTMLElement>('#message')!;
@@ -156,7 +157,19 @@ export function createHud(): Hud {
     spillValue.textContent = `${pct}%`;
     spillBar.style.width = `${pct}%`;
     const color = pct >= 80 ? '#f29179' : pct >= 50 ? '#f1b16a' : '#f1d28d';
-    spillBar.style.background = color;
+    const glow =
+      pct >= 80
+        ? 'rgba(242, 145, 121, 0.42)'
+        : pct >= 50
+          ? 'rgba(241, 177, 106, 0.38)'
+          : 'rgba(241, 210, 141, 0.35)';
+    spillBar.style.background = `linear-gradient(180deg, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0) 52%), ${color}`;
+    spillBar.style.boxShadow = `inset 0 1px 0 rgba(255,255,255,0.3), 0 0 18px ${glow}`;
+    const readoutShadow = `0 1px 2px rgba(0,0,0,0.55), 0 0 16px ${glow}`;
+    spillValue.style.color = color;
+    spillValue.style.textShadow = readoutShadow;
+    balanceLabel.style.color = color;
+    balanceLabel.style.textShadow = readoutShadow;
   };
 
   const setDistance: Hud['setDistance'] = (meters) => {

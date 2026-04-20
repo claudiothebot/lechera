@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>Milk Dreams — v0</title>
+    <title>Milk Dreams</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -18,7 +19,6 @@
       <div id="name-modal" class="name-modal hidden" aria-hidden="true" role="dialog" aria-labelledby="name-modal-title">
         <div class="name-modal__panel">
           <h2 id="name-modal-title" class="name-modal__title">What's your name?</h2>
-          <p class="name-modal__subtitle">It'll appear above your lechera and on the leaderboard.</p>
           <form id="name-modal-form" class="name-modal__form" autocomplete="off">
             <input
               id="name-modal-input"
@@ -38,12 +38,15 @@
         </div>
       </div>
       <canvas id="game"></canvas>
+      <div id="level-editor-root" class="level-editor-root hidden" aria-hidden="true"></div>
       <div id="hud">
         <div id="hud-left-column">
           <div class="hud-left-card">
-            <div id="net-badge" class="net-badge net-badge--idle" aria-live="polite">
-              <span class="net-badge__dot" aria-hidden="true"></span>
-              <span class="net-badge__text">Local</span>
+            <div class="hud-name-plate">
+              <div id="net-badge" class="net-badge net-badge--idle" aria-live="polite">
+                <span class="net-badge__dot" aria-hidden="true"></span>
+                <span class="net-badge__text">Local</span>
+              </div>
             </div>
             <div id="hud-time-block" aria-label="Time remaining">
               <div id="hud-round" class="hud-round">Round 1</div>
@@ -52,29 +55,35 @@
             <div id="hud-milk-block">
               <div class="hud-milk-stack" role="group" aria-label="Milk">
                 <div class="hud-milk-row hud-milk-row--carry">
-                  <img
-                    class="hud-milk-icon"
-                    src="/assets/milk-jug.svg"
-                    width="26"
-                    height="26"
-                    alt=""
-                  />
                   <div class="hud-milk-row__meta">
-                    <span class="hud-label">Carrying:</span>
-                    <span id="litres-carrying" class="hud-value hud-value--milk">1L</span>
+                    <span class="hud-label">Carrying</span>
+                    <div class="hud-milk-amount">
+                      <img
+                        class="hud-milk-icon"
+                        src="/assets/milk-jug.svg"
+                        width="24"
+                        height="24"
+                        alt=""
+                        decoding="async"
+                      />
+                      <span id="litres-carrying" class="hud-value hud-value--milk">1L</span>
+                    </div>
                   </div>
                 </div>
                 <div class="hud-milk-row hud-milk-row--done">
-                  <img
-                    class="hud-milk-icon hud-milk-icon--muted"
-                    src="/assets/milk-jug.svg"
-                    width="26"
-                    height="26"
-                    alt=""
-                  />
                   <div class="hud-milk-row__meta">
-                    <span class="hud-label hud-label--muted">Delivered:</span>
-                    <span id="litres-delivered" class="hud-value hud-value--milk hud-value--milk-delivered">0L</span>
+                    <span class="hud-label hud-label--muted">Delivered</span>
+                    <div class="hud-milk-amount">
+                      <img
+                        class="hud-milk-icon hud-milk-icon--muted"
+                        src="/assets/milk-jug.svg"
+                        width="24"
+                        height="24"
+                        alt=""
+                        decoding="async"
+                      />
+                      <span id="litres-delivered" class="hud-value hud-value--milk hud-value--milk-delivered">0L</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -86,12 +95,14 @@
         </div>
 
         <div id="hud-balance-center">
-          <div id="balance-bar-track">
-            <div id="spill-bar"></div>
-          </div>
-          <div id="balance-bar-footer">
-            <span id="balance-label">Balance</span>
-            <span id="spill-value">0%</span>
+          <div class="hud-balance-chrome">
+            <div id="balance-bar-track">
+              <div id="spill-bar"></div>
+            </div>
+            <div id="balance-bar-footer">
+              <span id="balance-label">Balance</span>
+              <span id="spill-value">0%</span>
+            </div>
           </div>
         </div>
 

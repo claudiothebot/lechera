@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js';
 import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
 
 /**
@@ -31,6 +32,13 @@ export interface InstallHdriSkyOptions {
    * Three r163+. Default: 1.0 (no change).
    */
   environmentIntensity?: number;
+  /**
+   * Yaw rotation (radians) applied to BOTH the visible skybox and the IBL
+   * env map, so reflections stay consistent with the visible sky. Lets us
+   * pick which slice of the equirectangular HDRI faces the camera without
+   * re-baking the asset. Three r163+. Default: 0 (no rotation).
+   */
+  yawRotation?: number;
 }
 
 export async function installHdriSky(
@@ -39,7 +47,11 @@ export async function installHdriSky(
   url: string,
   opts: InstallHdriSkyOptions = {},
 ): Promise<SkyHandle> {
-  const loader = new HDRLoader();
+  // Pick loader by extension. Both Poly Haven (.hdr / RGBE) and ambientCG
+  // (.exr / OpenEXR) panoramas are common; we treat any other extension as
+  // RGBE since that is the historical default for our project.
+  const isExr = /\.exr($|\?)/i.test(url);
+  const loader = isExr ? new EXRLoader() : new HDRLoader();
   const hdrTex = await loader.loadAsync(url);
 
   const pmrem = new THREE.PMREMGenerator(renderer);
@@ -53,17 +65,37 @@ export async function installHdriSky(
   scene.background = envTex;
   scene.environment = envTex;
 
-  // Both properties exist on Scene in modern Three but aren't typed in every
+  // These properties exist on Scene in modern Three but aren't typed in every
   // version of @types/three we target, so we set them with a narrow cast.
+  // `backgroundRotation` / `environmentRotation` are Euler instances (r163+);
+  // we only need yaw, so we leave x/z at 0.
   const sceneExtras = scene as unknown as {
     backgroundIntensity?: number;
     environmentIntensity?: number;
+    backgroundRotation?: THREE.Euler;
+    environmentRotation?: THREE.Euler;
   };
   if (opts.backgroundIntensity !== undefined) {
     sceneExtras.backgroundIntensity = opts.backgroundIntensity;
   }
   if (opts.environmentIntensity !== undefined) {
     sceneExtras.environmentIntensity = opts.environmentIntensity;
+  }
+  if (opts.yawRotation !== undefined && opts.yawRotation !== 0) {
+    // Mutate the existing Euler in place when present (Three constructs a
+    // default one); only fall back to allocating a new Euler if the field
+    // isn't initialised (older versions / runtime mismatch).
+    const yaw = opts.yawRotation;
+    if (sceneExtras.backgroundRotation) {
+      sceneExtras.backgroundRotation.y = yaw;
+    } else {
+      sceneExtras.backgroundRotation = new THREE.Euler(0, yaw, 0);
+    }
+    if (sceneExtras.environmentRotation) {
+      sceneExtras.environmentRotation.y = yaw;
+    } else {
+      sceneExtras.environmentRotation = new THREE.Euler(0, yaw, 0);
+    }
   }
 
   return {

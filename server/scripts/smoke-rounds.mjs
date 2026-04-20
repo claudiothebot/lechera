@@ -35,6 +35,9 @@ const server = spawn(
       PORT: String(PORT),
       MD_ROUND_MS: '3000',
       MD_SCOREBOARD_MS: '1500',
+      // Hermetic: this smoke test is about room lifecycle, not persistence.
+      SUPABASE_URL: '',
+      SUPABASE_ANON_KEY: '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   },
@@ -108,6 +111,8 @@ console.log(
 if (room.state.phase !== 'playing') fail(`expected initial phase=playing`);
 
 // Step 3: claim one delivery so we have something to display in scoreboard.
+room.send('pose', { x: GOAL_0.x, z: GOAL_0.z, yaw: 0 });
+await wait(100);
 room.send('claim_delivery', { x: GOAL_0.x, z: GOAL_0.z });
 await wait(300);
 if (self.dreamIndex !== 1) {

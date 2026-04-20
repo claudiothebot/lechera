@@ -105,9 +105,13 @@ interface PoseMessage {
 }
 
 interface ClaimDeliveryMessage {
-  /** Position the client believed it was at when it claimed delivery. */
-  x: number;
-  z: number;
+  /**
+   * Legacy payload fields from the client. Still accepted on the wire
+   * for compatibility, but ignored for validation: delivery authority
+   * comes from the latest server-tracked pose (`Player.x/z`).
+   */
+  x?: number;
+  z?: number;
 }
 
 /**
@@ -222,10 +226,11 @@ export class MilkDreamsRoom extends Room<{ state: MilkDreamsState }> {
     /**
      * Phase 3 — server-authoritative delivery.
      *
-     * The client sends its position when it thinks it has reached the
-     * current dream's goal. The server checks the distance against its
-     * own goal table and, if the claim is plausible, advances the
-     * player's `dreamIndex` (and updates `litres`).
+     * The client tells us "I think I delivered now". Validation uses the
+     * latest pose the SERVER already has for that player (`p.x/z`), not
+     * whatever coordinates came in with the claim payload, so a custom
+     * client can't trivially farm score by sending goal coordinates
+     * without ever moving.
      *
      * Phase 4 — claims are silently ignored during the 'scoreboard'
      * phase. The visual is frozen (no goal marker logic on the client
@@ -235,19 +240,19 @@ export class MilkDreamsRoom extends Room<{ state: MilkDreamsState }> {
     this.onMessage('claim_delivery', (client, raw) => {
       if (this.state.phase !== 'playing') return;
       const msg = raw as Partial<ClaimDeliveryMessage>;
-      if (typeof msg?.x !== 'number' || typeof msg?.z !== 'number') return;
+      if (msg && typeof msg !== 'object') return;
       const p = this.state.players.get(client.sessionId);
       if (!p) return;
 
       const goal = goalFor(p.dreamIndex);
-      const dx = msg.x - goal.x;
-      const dz = msg.z - goal.z;
+      const dx = p.x - goal.x;
+      const dz = p.z - goal.z;
       const distSq = dx * dx + dz * dz;
       const limit = GOAL_RADIUS + DELIVERY_TOLERANCE;
       if (distSq > limit * limit) {
         console.log(
           `[room] reject delivery ${client.sessionId} dreamIndex=${p.dreamIndex} ` +
-            `dist=${Math.sqrt(distSq).toFixed(2)} > ${limit.toFixed(2)}`,
+            `serverDist=${Math.sqrt(distSq).toFixed(2)} > ${limit.toFixed(2)}`,
         );
         return;
       }
@@ -441,15 +446,24 @@ export class MilkDreamsRoom extends Room<{ state: MilkDreamsState }> {
       }
     });
 
-    // Persist FIRST, then flip the phase. See the block comment at the
-    // top of this method for the rationale.
-    await getLeaderboardStore().recordRoundContributions(contributions);
-
     this.state.phase = 'scoreboard';
     this.state.phaseEndsAt = Date.now() + SCOREBOARD_DURATION_MS;
     console.log(
       `[room] round ${this.state.roundNumber} ended -> scoreboard for ${Math.round(SCOREBOARD_DURATION_MS / 1000)}s ; ${tops.join(' ')}`,
     );
+
+    // Persistence is intentionally fire-and-forget: the round lifecycle
+    // must never stall behind Supabase latency or outages. The store
+    // swallows its own RPC errors/timeouts and resolves, so this is only
+    // here to keep the sequencing explicit and make any unexpected throw
+    // visible in logs.
+    void getLeaderboardStore()
+      .recordRoundContributions(contributions)
+      .catch((err) => {
+        console.warn(
+          `[room] background leaderboard persist threw: ${(err as Error).message}`,
+        );
+      });
 
     this.phaseTimer = setTimeout(
       () => {

@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "groundSize": 1200,
+  "mainPath": {
+    "width": 3.2,
+    "yLift": 0.01,
+    "waypoints": [
+      { "x": 0, "z": 20 },
+      { "x": 1, "z": 14 },
+      { "x": -0.5, "z": 6 },
+      { "x": 1.5, "z": 0 },
+      { "x": -0.5, "z": -10 },
+      { "x": 0.5, "z": -18 },
+      { "x": -1, "z": -24 },
+      { "x": 0, "z": -30 }
+    ]
+  },
+  "pavedPaths": [
+    {
+      "width": 2,
+      "yLift": 0.04,
+      "waypoints": [
+        { "x": -7, "z": 20 },
+        { "x": -3, "z": 20 },
+        { "x": 3, "z": 20 },
+        { "x": 7, "z": 20 }
+      ]
+    },
+    {
+      "width": 2,
+      "yLift": 0.04,
+      "waypoints": [
+        { "x": 1, "z": 15 },
+        { "x": 6, "z": 12 },
+        { "x": 14, "z": 9 },
+        { "x": 22, "z": 7 },
+        { "x": 30, "z": 5.5 }
+      ]
+    },
+    {
+      "width": 2,
+      "yLift": 0.04,
+      "waypoints": [
+        { "x": -1, "z": 15 },
+        { "x": -6, "z": 13 },
+        { "x": -14, "z": 11 },
+        { "x": -24, "z": 9 },
+        { "x": -32, "z": 7.5 }
+      ]
+    }
+  ],
+  "houseSlots": [
+    { "x": -34, "z": 38, "yaw": 0, "halfX": 1.2, "halfZ": 1.2, "halfY": 1 },
+    { "x": 28, "z": 32, "yaw": 1.5707963267948966, "halfX": 1.2, "halfZ": 1.2, "halfY": 1 },
+    { "x": -38, "z": 8, "yaw": 3.141592653589793, "halfX": 1.2, "halfZ": 1.2, "halfY": 1 },
+    { "x": 36, "z": 5, "yaw": 4.71238898038469, "halfX": 1.2, "halfZ": 1.2, "halfY": 1 },
+    { "x": -40, "z": -18, "yaw": 0, "halfX": 1.2, "halfZ": 1.2, "halfY": 1 },
+    { "x": 32, "z": -38, "yaw": 1.5707963267948966, "halfX": 1.2, "halfZ": 1.2, "halfY": 1 },
+    { "x": -18, "z": -44, "yaw": 3.141592653589793, "halfX": 1.2, "halfZ": 1.2, "halfY": 1 },
+    { "x": 40, "z": -12, "yaw": 4.71238898038469, "halfX": 1.2, "halfZ": 1.2, "halfY": 1 },
+    { "x": -12, "z": -28, "yaw": 0, "halfX": 1.2, "halfZ": 1.2, "halfY": 1 }
+  ],
+  "worldBoundary": {
+    "centerX": 0,
+    "centerZ": -5,
+    "radius": 55
+  },
+  "treeScatter": {
+    "count": 8,
+    "bounds": { "minX": -34, "maxX": 34, "minZ": -42, "maxZ": 26 },
+    "footprintM": 7.5,
+    "minSpacingM": 4,
+    "mainPathClearM": 3.5,
+    "pavedPathClearM": 2.5,
+    "spawnClearM": 4.5,
+    "houseClearM": 5.5,
+    "obstacleClearM": 4.5
+  },
+  "billboards": {
+    "mode": "procedural",
+    "count": 10,
+    "placements": [],
+    "playArea": { "minX": -30, "maxX": 30, "minZ": -36, "maxZ": 22 },
+    "minSpacingM": 12,
+    "pathClearM": 4,
+    "spawnClearM": 6,
+    "goalClearM": 4,
+    "houseClearM": 6,
+    "spawnFacingMinDistM": 9,
+    "spawnFacingMaxDistM": 14
+  }
+}

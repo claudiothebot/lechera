@@ -4,6 +4,10 @@ dist
 .DS_Store
 .vite
 
+# Local scratch space for source assets (Meshy AI exports etc.) before
+# they get optimized into public/models/. Anything in here is editor-only.
+.temp/
+
 # Source GLBs kept locally for editing; runtime loads *-opt.glb only (~76 MB saved in git).
 public/models/lechera-walk.glb
 public/models/lechera-tpose.glb

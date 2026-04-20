@@ -61,6 +61,8 @@ console.log(
 );
 
 // 1. Reject: claim from far away.
+a.room.send('pose', { x: 50, z: 50, yaw: 0 });
+await wait(100);
 a.room.send('claim_delivery', { x: 50, z: 50 });
 await wait(300);
 if (aSelf.dreamIndex !== 0) {
@@ -70,6 +72,8 @@ if (aSelf.dreamIndex !== 0) {
 console.log('[step 1] reject far claim — OK (still dreamIndex=0)');
 
 // 2. Accept: claim exactly at goal.
+a.room.send('pose', { x: GOAL_0.x, z: GOAL_0.z, yaw: 0 });
+await wait(100);
 a.room.send('claim_delivery', { x: GOAL_0.x, z: GOAL_0.z });
 await wait(300);
 if (aSelf.dreamIndex !== 1) {
