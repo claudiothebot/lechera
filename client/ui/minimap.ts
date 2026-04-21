@@ -77,10 +77,20 @@ export function createMinimap(canvas: HTMLCanvasElement): Minimap {
 
     // Obstacles (axis-aligned boxes). Drawn first so the goal / spawn sit on
     // top visually, in case the goal happens to land inside a box tint.
+    //
+    // Early-out on world-space distance before computing pixel coordinates:
+    // the level now ships with ~100+ tree obstacles in the horizon ring, and
+    // almost all of them sit well outside the radar radius every frame. The
+    // corner-safe cutoff (radius · √2) keeps boxes whose centre is off-radar
+    // but whose half-extents still poke into the visible disc.
     ctx!.fillStyle = 'rgba(205, 190, 160, 0.55)';
+    const cullRadiusSq = RADAR_RADIUS_M * RADAR_RADIUS_M * 2;
     for (const ob of state.obstacles) {
-      const dx = (ob.center.x - state.playerX) * metresToPx;
-      const dz = (ob.center.z - state.playerZ) * metresToPx;
+      const dxM = ob.center.x - state.playerX;
+      const dzM = ob.center.z - state.playerZ;
+      if (dxM * dxM + dzM * dzM > cullRadiusSq) continue;
+      const dx = dxM * metresToPx;
+      const dz = dzM * metresToPx;
       const w = ob.halfX * 2 * metresToPx;
       const h = ob.halfZ * 2 * metresToPx;
       ctx!.fillRect(dx - w / 2, dz - h / 2, w, h);

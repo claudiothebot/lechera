@@ -125,6 +125,12 @@ export function createPlayer(scene: THREE.Scene, spawn: THREE.Vector3): Player {
   const velocity = new THREE.Vector3();
   const prevVelocity = new THREE.Vector3();
   const moveIntent = new THREE.Vector3();
+  // Scratch vectors reused every frame by `update` to avoid per-frame Vec3
+  // allocations (GC pressure matters in a 60 Hz loop).
+  const next = new THREE.Vector3();
+  // Bumps buffer is reused and length-reset each frame. Consumers that want
+  // to stash bumps across frames should copy them before the next update.
+  const bumps: BumpEvent[] = [];
   // Spawn facing -Z (toward the goal), not toward the camera.
   let facing = Math.PI;
   group.rotation.y = facing + Math.PI;
@@ -133,7 +139,7 @@ export function createPlayer(scene: THREE.Scene, spawn: THREE.Vector3): Player {
     position: group.position,
     worldAccelX: 0,
     worldAccelZ: 0,
-    bumps: [],
+    bumps,
     speed: 0,
     facing,
     angularVelocity: 0,
@@ -151,7 +157,9 @@ export function createPlayer(scene: THREE.Scene, spawn: THREE.Vector3): Player {
     result.worldAccelX = 0;
     result.worldAccelZ = 0;
     result.speed = 0;
-    result.bumps = [];
+    // Clear in-place so `result.bumps` keeps pointing at the same buffer
+    // shared with the module-local `bumps` scratch array.
+    bumps.length = 0;
     result.facing = facing;
     result.angularVelocity = 0;
   }
@@ -191,9 +199,9 @@ export function createPlayer(scene: THREE.Scene, spawn: THREE.Vector3): Player {
     if (delta.length() > maxStep) delta.setLength(maxStep);
     velocity.add(delta);
 
-    const next = group.position.clone().addScaledVector(velocity, dt);
+    next.copy(group.position).addScaledVector(velocity, dt);
 
-    const bumps: BumpEvent[] = [];
+    bumps.length = 0;
     for (const ob of obstacles) {
       const dx = next.x - ob.center.x;
       const dz = next.z - ob.center.z;
@@ -278,7 +286,8 @@ export function createPlayer(scene: THREE.Scene, spawn: THREE.Vector3): Player {
     result.worldAccelX = (velocity.x - prevVelocity.x) / dtSafe;
     result.worldAccelZ = (velocity.z - prevVelocity.z) / dtSafe;
     result.speed = speed;
-    result.bumps = bumps;
+    // `result.bumps` aliases the module-local `bumps` array; no reassignment
+    // needed — callers read what we've pushed above.
     result.facing = facing;
     // wrapAngle() keeps the delta in (-π, π] so a wrap from +π to -π
     // doesn't register as a near-2π spike in angular velocity.

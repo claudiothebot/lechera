@@ -49,6 +49,13 @@ const PROP_COLLIDER_SHRINK = 0.8;
  * used for the tweet billboards (`buildBillboardCollisionObstacles`).
  */
 export async function loadLevelSceneryProps(level: Level): Promise<void> {
+  // Preload one GLB per unique kind in parallel. `getSceneryModel` caches so
+  // repeated kinds share a single network fetch; the prefetch here ensures
+  // no kind waits serially on another kind (without this, the first cart
+  // blocks the first well, which blocks the first haystack, etc.).
+  const uniqueKinds = Array.from(new Set(level.definition.sceneryProps.map((sp) => sp.kind)));
+  await Promise.all(uniqueKinds.map((kind) => getSceneryModel(kind)));
+
   const newObstacles: Obstacle[] = [];
   for (const sp of level.definition.sceneryProps) {
     const model = await getSceneryModel(sp.kind);

@@ -58,8 +58,35 @@ export interface AllTimeEntry {
   country: string | null;
 }
 
+/**
+ * Balance hint state, one call per frame while playing. The hint cluster
+ * is pinned to `(screenX, screenY)` in CSS pixels; the forward/right axes
+ * are camera-relative so the caller is responsible for mapping
+ * `balance.tiltForward/Right` straight through.
+ *
+ * Axes are shown INDEPENDENTLY: at most ONE arrow per axis appears (the
+ * opposing direction, i.e. the key the player should press to correct).
+ */
+export interface BalanceHintInput {
+  /** Camera-space tilt, radians. Positive forward = leaning away from camera. */
+  tiltForward: number;
+  /** Camera-space tilt, radians. Positive right = leaning to camera-right. */
+  tiltRight: number;
+  /** Current spill threshold (rad). Used to normalise severity. */
+  maxTilt: number;
+  /** Centre of the hint cluster, in CSS pixels relative to the viewport. */
+  screenX: number;
+  screenY: number;
+  /** False when the jug is off-screen or behind the camera. */
+  visible: boolean;
+}
+
 export interface Hud {
   setBalance(normalizedTilt: number): void;
+  /** Per-frame update for the arrow prompts above the jug. */
+  setBalanceHints(input: BalanceHintInput): void;
+  /** Hide all four arrows (e.g. when not playing). */
+  hideBalanceHints(): void;
   setDistance(meters: number): void;
   setStatus(status: GameStatus, ctx?: GameOverContext): void;
   setLocked(locked: boolean): void;
@@ -149,6 +176,11 @@ export function createHud(): Hud {
     document.querySelector<HTMLElement>('#scoreboard-countdown')!;
   const leaderboardList =
     document.querySelector<HTMLOListElement>('#leaderboard-list')!;
+  const balanceHints = document.querySelector<HTMLElement>('#balance-hints')!;
+  const balanceHintUp = balanceHints.querySelector<HTMLElement>('.balance-hint--up')!;
+  const balanceHintDown = balanceHints.querySelector<HTMLElement>('.balance-hint--down')!;
+  const balanceHintLeft = balanceHints.querySelector<HTMLElement>('.balance-hint--left')!;
+  const balanceHintRight = balanceHints.querySelector<HTMLElement>('.balance-hint--right')!;
 
   let lastBalancePct = -1;
   let lastDistance = -1;
@@ -164,6 +196,95 @@ export function createHud(): Hud {
   let lastNetHue: number | null = null;
   let lastNetCountry: string | null = null;
   let lastScoreboardCountdown = -1;
+
+  // -- Balance hints -----------------------------------------------------
+  // Axis thresholds: below these fractions of the current `maxTilt`, the
+  // arrow is hidden entirely. Above, opacity + scale + colour ramp with
+  // severity so "almost spilling" reads brighter/bigger than "slightly off".
+  const BALANCE_HINT_MIN_FRACTION = 0.1;
+  const BALANCE_HINT_FULL_FRACTION = 0.75;
+
+  // Reused to avoid layout thrash. Always mutate then read once in JS.
+  let lastHintVisible = false;
+
+  const applyHintAxis = (
+    positive: HTMLElement,
+    negative: HTMLElement,
+    tilt: number,
+    maxTilt: number,
+  ): void => {
+    const frac = maxTilt > 0 ? Math.abs(tilt) / maxTilt : 0;
+    if (frac < BALANCE_HINT_MIN_FRACTION) {
+      positive.classList.remove('is-active');
+      negative.classList.remove('is-active');
+      return;
+    }
+    // Prompt the key that REDUCES |tilt|: if jug leans positive, show the
+    // arrow on the NEGATIVE side (player presses "backwards").
+    const leansPositive = tilt > 0;
+    const active = leansPositive ? negative : positive;
+    const idle = leansPositive ? positive : negative;
+    idle.classList.remove('is-active');
+
+    const severity = Math.min(
+      1,
+      Math.max(
+        0,
+        (frac - BALANCE_HINT_MIN_FRACTION) /
+          (BALANCE_HINT_FULL_FRACTION - BALANCE_HINT_MIN_FRACTION),
+      ),
+    );
+    const opacity = 0.55 + severity * 0.45;
+    const scale = 0.85 + severity * 0.35;
+    const color =
+      severity >= 0.75
+        ? '#f29179'
+        : severity >= 0.45
+          ? '#f1b16a'
+          : '#f1d28d';
+
+    active.style.setProperty('--hint-opacity', String(opacity.toFixed(2)));
+    active.style.setProperty('--hint-scale', String(scale.toFixed(2)));
+    active.style.setProperty('--hint-color', color);
+    active.classList.add('is-active');
+  };
+
+  const setBalanceHints: Hud['setBalanceHints'] = (input) => {
+    if (!input.visible || input.maxTilt <= 0) {
+      if (lastHintVisible) {
+        lastHintVisible = false;
+        balanceHints.classList.remove('is-visible');
+        balanceHintUp.classList.remove('is-active');
+        balanceHintDown.classList.remove('is-active');
+        balanceHintLeft.classList.remove('is-active');
+        balanceHintRight.classList.remove('is-active');
+      }
+      return;
+    }
+    // Forward axis: up (away from camera) vs down (toward camera).
+    // A positive `tiltForward` means the jug leans forward -> player
+    // must pull it back -> DOWN arrow is the corrective prompt.
+    applyHintAxis(balanceHintUp, balanceHintDown, input.tiltForward, input.maxTilt);
+    applyHintAxis(balanceHintLeft, balanceHintRight, input.tiltRight, input.maxTilt);
+
+    // `translate3d` promotes onto its own layer and avoids layout reflow.
+    balanceHints.style.transform = `translate3d(${input.screenX}px, ${input.screenY}px, 0)`;
+    if (!lastHintVisible) {
+      lastHintVisible = true;
+      balanceHints.classList.add('is-visible');
+    }
+  };
+
+  const hideBalanceHints: Hud['hideBalanceHints'] = () => {
+    if (!lastHintVisible) return;
+    lastHintVisible = false;
+    balanceHints.classList.remove('is-visible');
+    balanceHintUp.classList.remove('is-active');
+    balanceHintDown.classList.remove('is-active');
+    balanceHintLeft.classList.remove('is-active');
+    balanceHintRight.classList.remove('is-active');
+  };
+  // ----------------------------------------------------------------------
 
   const setBalance: Hud['setBalance'] = (normalizedTilt) => {
     const pct = Math.round(Math.max(0, Math.min(1, normalizedTilt)) * 100);
@@ -465,6 +586,8 @@ export function createHud(): Hud {
 
   return {
     setBalance,
+    setBalanceHints,
+    hideBalanceHints,
     setDistance,
     setStatus,
     setLocked,

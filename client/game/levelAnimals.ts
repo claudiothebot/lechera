@@ -61,7 +61,7 @@ const TARGET_SIZE_M: Record<AnimalKey, number> = {
   /** First phase — slightly larger baskets, tighter formation (see `formationFor`). */
   eggs: 0.64,
   chicken: 0.75,
-  pig: 1.35,
+  pig: 1.9,
   calf: 1.4,
   cow: 1.7,
   ferrari: 3.4,

@@ -17,7 +17,7 @@ import {
   type LevelPathDefinition,
 } from './levelDefinition';
 import { loadTreeModel, TREE_SCATTER_WORLD_SCALE, TREE_VARIANT_URLS } from './treeModel';
-import type { TreeModel } from './treeModel';
+import type { InstancedTreePlacement, TreeModel } from './treeModel';
 import type { TreeVariantKind } from './levelDefinition';
 
 export interface Level {
@@ -675,8 +675,11 @@ export { loadLevelSceneryProps } from './sceneryProps';
  * registers a **trunk-sized** AABB obstacle so the player can brush the
  * foliage but can't walk through the trunk.
  *
- * Trees load in parallel once per distinct variant; the per-placement
- * work is just a cheap `clone(true)` + transform. Gameplay continues
+ * Trees load in parallel once per distinct variant and are then placed with
+ * `THREE.InstancedMesh`: one mesh per leaf in the GLB (trunk + foliage),
+ * all placements of a variant sharing it. A scene with ~150 trees across 3
+ * variants collapses from ~300 draw calls down to ~6, and per-instance work
+ * is just a matrix composition instead of a deep clone. Gameplay continues
  * without trees until the GLBs resolve.
  *
  * `goals` is kept for API compatibility with the existing call site but
@@ -699,25 +702,46 @@ export async function loadLevelTrees(
   );
   const models = new Map<TreeVariantKind, TreeModel>(modelPairs);
 
-  // Trunk collider radius, in metres. Scales with the world-scale applied
-  // to scattered trees so the collider matches the visual trunk girth.
-  const trunkR = 0.7 * TREE_SCATTER_WORLD_SCALE;
+  // Trunk collider radius, in metres. The visual trunk is slender and the
+  // canopy sits well above the player's head, so the collider is kept
+  // deliberately tight — brushing a tree should only trigger when you are
+  // effectively walking through the trunk. Scales with the world-scale
+  // applied to scattered trees so variants stay in proportion.
+  const trunkR = 0.16 * TREE_SCATTER_WORLD_SCALE;
+
+  // Bucket placements by variant so each variant can be drawn via a single
+  // InstancedMesh group (one draw call per leaf mesh, not per tree).
+  const placementsByVariant = new Map<TreeVariantKind, InstancedTreePlacement[]>();
+  for (const p of placements) {
+    if (!models.has(p.variant)) continue;
+    let bucket = placementsByVariant.get(p.variant);
+    if (!bucket) {
+      bucket = [];
+      placementsByVariant.set(p.variant, bucket);
+    }
+    bucket.push({ x: p.x, z: p.z, yaw: p.yaw });
+  }
 
   const newObstacles: Obstacle[] = [];
-  for (const p of placements) {
-    const model = models.get(p.variant);
+  for (const [variant, variantPlacements] of placementsByVariant) {
+    const model = models.get(variant);
     if (!model) continue;
-    const instance = model.instance();
-    instance.position.set(p.x, 0, p.z);
-    instance.rotation.y = p.yaw;
-    level.group.add(instance);
-    newObstacles.push({
-      center: new THREE.Vector3(p.x, model.halfY, p.z),
-      halfX: trunkR,
-      halfZ: trunkR,
-      halfY: model.halfY,
-      visual: instance,
-    });
+    const instancedGroup = model.createInstancedMeshes(variantPlacements);
+    level.group.add(instancedGroup);
+
+    // Collision still uses one AABB per tree; the `visual` reference is
+    // shared across all trees of this variant (the obstacle system only uses
+    // `visual` to swap placeholder boxes when a house GLB resolves, which
+    // trees never do, so sharing is safe).
+    for (const p of variantPlacements) {
+      newObstacles.push({
+        center: new THREE.Vector3(p.x, model.halfY, p.z),
+        halfX: trunkR,
+        halfZ: trunkR,
+        halfY: model.halfY,
+        visual: instancedGroup,
+      });
+    }
   }
 
   level.addObstacles(newObstacles);

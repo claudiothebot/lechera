@@ -149,19 +149,36 @@ async function boot() {
   const ambient = new THREE.HemisphereLight(0xbfd8ef, 0x3a3424, 0.18);
   scene.add(ambient);
 
+  // Sun with a player-following shadow. Keeping the shadow camera parked on
+  // top of the player lets us use a tight frustum (22 m half-extent around
+  // them) that covers everything they can possibly see within shadow-casting
+  // distance. Tight frustum + 768² map = sharper shadows at lower GPU cost
+  // than a static 30 m × 1024² rig that had to cover the full playable disc.
+  // PCFShadowMap (not soft) is deliberate: the extra taps of the soft variant
+  // add fragment cost without meaningfully improving the daydream look.
   const sun = new THREE.DirectionalLight(0xfff0d6, 1.1);
   sun.position.set(20, 35, 15);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(1024, 1024);
-  sun.shadow.camera.left = -30;
-  sun.shadow.camera.right = 30;
-  sun.shadow.camera.top = 30;
-  sun.shadow.camera.bottom = -30;
+  sun.shadow.mapSize.set(768, 768);
+  sun.shadow.camera.left = -22;
+  sun.shadow.camera.right = 22;
+  sun.shadow.camera.top = 22;
+  sun.shadow.camera.bottom = -22;
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 80;
+  // Slight bias bump compensates for the lower map resolution avoiding acne
+  // on large receivers (ground plane).
+  sun.shadow.bias = -0.0005;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   scene.add(sun);
+  // DirectionalLight aims from position toward target.position. We'll drive
+  // both together from the player position each frame (see animation loop).
+  scene.add(sun.target);
+  // Keep the original sun→origin angle so the shadow direction stays
+  // consistent across the map. Storing the offset once avoids re-reading
+  // sun.position.clone() every frame.
+  const SUN_OFFSET = sun.position.clone();
 
   // Level geometry is still authored in `public/levels/level-01.json` and
   // edited via the in-browser level editor (?editor=1). If
@@ -328,6 +345,10 @@ async function boot() {
 
   const tiltAxis = new THREE.Vector3();
   const jugWorldPos = new THREE.Vector3();
+  /** World-space anchor used to project the on-screen balance-hint cluster. */
+  const hintProjectionVec = new THREE.Vector3();
+  /** Offset above the jug (m) where the arrow cluster should float. */
+  const HINT_ABOVE_JUG_M = 0.5;
 
   let status: GameStatus = 'playing';
   let timeRemaining = TOTAL_TIME_SECONDS;
@@ -349,6 +370,13 @@ async function boot() {
    * 60 Hz with N rebuilt array literals.
    */
   const frameObstacles: Obstacle[] = [];
+  /**
+   * Reused scratch buffer for translating the player's raw bumps (world-space
+   * direction + impulse) into the camera-relative `{forward, right}` form the
+   * jug balance system wants. Sized / repopulated each frame to avoid
+   * allocating a new array + N objects at 60 Hz.
+   */
+  const frameBumps: BumpInput[] = [];
   /**
    * Phase 6d — pre-allocated `Obstacle` shells reused for remote
    * players. We only mutate `center.x` / `center.z` per frame; halfX,
@@ -891,15 +919,28 @@ async function boot() {
       camAccelForward += yawAccelWorldX * sn + yawAccelWorldZ * -cs;
       camAccelRight += yawAccelWorldX * cs + yawAccelWorldZ * sn;
 
-      const bumps: BumpInput[] = r.bumps.map((b) => ({
-        forward: (b.dirX * sn + b.dirZ * -cs) * b.impulse,
-        right: (b.dirX * cs + b.dirZ * sn) * b.impulse,
-      }));
+      // Reuse scratch buffer + in-place mutate entries when possible so this
+      // 60 Hz path doesn't allocate one array + N objects per frame. When the
+      // buffer is shorter than `r.bumps`, we grow it with fresh entries; when
+      // it's longer we just truncate via `.length`.
+      for (let i = 0; i < r.bumps.length; i++) {
+        const b = r.bumps[i]!;
+        const forward = (b.dirX * sn + b.dirZ * -cs) * b.impulse;
+        const right = (b.dirX * cs + b.dirZ * sn) * b.impulse;
+        const slot = frameBumps[i];
+        if (slot) {
+          slot.forward = forward;
+          slot.right = right;
+        } else {
+          frameBumps.push({ forward, right });
+        }
+      }
+      frameBumps.length = r.bumps.length;
 
       balance.update(dt, {
         camAccelForward,
         camAccelRight,
-        bumps,
+        bumps: frameBumps,
         inputForward: input.axes.tiltForward,
         inputRight: input.axes.tiltRight,
       });
@@ -926,6 +967,40 @@ async function boot() {
       const distance = player.group.position.distanceTo(level.goal);
       hud.setDistance(distance);
       hud.setBalance(balance.normalizedTilt);
+
+      // Arrow prompts above the jug. Project a point slightly above the
+      // jug into CSS pixel space; hide when the cluster would fall off-
+      // screen or sit behind the camera (project returns z outside [-1, 1]
+      // in that case).
+      if (status === 'playing' && !balance.isSpilled) {
+        hintProjectionVec.copy(jugWorldPos);
+        hintProjectionVec.y += HINT_ABOVE_JUG_M;
+        hintProjectionVec.project(camera);
+        const onScreen =
+          hintProjectionVec.z >= -1 &&
+          hintProjectionVec.z <= 1 &&
+          hintProjectionVec.x >= -1 &&
+          hintProjectionVec.x <= 1 &&
+          hintProjectionVec.y >= -1 &&
+          hintProjectionVec.y <= 1;
+        if (onScreen) {
+          const rect = renderer.domElement.getBoundingClientRect();
+          const screenX = rect.left + ((hintProjectionVec.x + 1) * 0.5) * rect.width;
+          const screenY = rect.top + ((1 - hintProjectionVec.y) * 0.5) * rect.height;
+          hud.setBalanceHints({
+            tiltForward: balance.tiltForward,
+            tiltRight: balance.tiltRight,
+            maxTilt: balance.maxTilt,
+            screenX,
+            screenY,
+            visible: true,
+          });
+        } else {
+          hud.hideBalanceHints();
+        }
+      } else {
+        hud.hideBalanceHints();
+      }
 
       // End-of-run conditions, in priority order.
       // In MP, the local 'timeout' status is suppressed: the server's
@@ -1000,6 +1075,19 @@ async function boot() {
       );
       hud.setBalance(balance.normalizedTilt);
     }
+
+    // Sun + shadow camera follow the player so the tight shadow frustum
+    // always covers what they can see. `sun.target.position` drives the
+    // light direction; `sun.position` sits at a fixed offset above / beside
+    // them (SUN_OFFSET captured at bootstrap) so the shadow direction on
+    // receivers stays stable as the player moves. `updateMatrixWorld(true)`
+    // on the target is what the shadow camera consults — skipping it leaves
+    // the shadow stale by a frame at the edges.
+    const px = player.group.position.x;
+    const pz = player.group.position.z;
+    sun.position.set(px + SUN_OFFSET.x, SUN_OFFSET.y, pz + SUN_OFFSET.z);
+    sun.target.position.set(px, 0, pz);
+    sun.target.updateMatrixWorld(true);
 
     // Multiplayer: ship our pose (rate-limited to 20 Hz internally),
     // then advance remote-player interpolation so their visuals catch

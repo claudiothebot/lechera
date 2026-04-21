@@ -1,6 +1,8 @@
 // One-off script: densifies the horizon tree ring of public/levels/level-01.json
-// so angular gaps stay below ~6° (≈8 m of arc at r=68). Uses a seeded PRNG so
-// running it twice is idempotent-ish (same added trees).
+// so angular gaps stay below TARGET_GAP_DEG (the lower the value, the denser
+// the forest). Uses a seeded PRNG so a single run is deterministic. Each run
+// is **additive**: trees are only appended, never removed. Lower the target
+// and run again to densify further.
 //
 // Usage (from repo root):
 //   node scripts/fill-tree-ring.mjs
@@ -15,7 +17,7 @@ const cx = level.worldBoundary.centerX;
 const cz = level.worldBoundary.centerZ;
 const R = level.worldBoundary.radius;
 
-const TARGET_GAP_DEG = 6;
+const TARGET_GAP_DEG = 3;
 const RING_R_MIN = 63;
 const RING_R_MAX = 74;
 const VARIANTS = ['poplar', 'poplar-alt'];

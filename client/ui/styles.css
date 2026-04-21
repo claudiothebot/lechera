@@ -490,6 +490,85 @@ body {
   color: var(--warn);
 }
 
+/*
+ * Balance hints — four arrow prompts pinned above the jug in screen
+ * space. Container is positioned per frame via `transform: translate3d`
+ * so `hud.setBalanceHints` only pays a single style mutation per arrow.
+ * Arrows are CSS triangles (no glyph fallbacks); each axis has one
+ * directional hint (forward/backward OR left/right, never both on the
+ * same axis).
+ */
+#balance-hints {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 88px;
+  height: 88px;
+  transform: translate3d(-9999px, -9999px, 0);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 140ms ease-out;
+  /* Keep above the scene canvas but below modals like the scoreboard. */
+  z-index: 4;
+}
+
+#balance-hints.is-visible {
+  opacity: 1;
+}
+
+.balance-hint {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  left: 50%;
+  top: 50%;
+  transform-origin: 50% 50%;
+  transition:
+    opacity 90ms ease-out,
+    transform 90ms ease-out,
+    border-color 180ms ease-out;
+  /* Soft glow; color re-set inline from the tilt severity. */
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.55));
+}
+
+.balance-hint.is-active {
+  opacity: var(--hint-opacity, 0.7);
+}
+
+/* Triangles via border trick — each direction rotates the pointy side. */
+.balance-hint--up {
+  border-left: 10px solid transparent;
+  border-right: 10px solid transparent;
+  border-bottom: 14px solid var(--hint-color, #f1d28d);
+  margin-left: -10px;
+  transform: translate(0, -42px) scale(var(--hint-scale, 1));
+}
+
+.balance-hint--down {
+  border-left: 10px solid transparent;
+  border-right: 10px solid transparent;
+  border-top: 14px solid var(--hint-color, #f1d28d);
+  margin-left: -10px;
+  transform: translate(0, 28px) scale(var(--hint-scale, 1));
+}
+
+.balance-hint--left {
+  border-top: 10px solid transparent;
+  border-bottom: 10px solid transparent;
+  border-right: 14px solid var(--hint-color, #f1d28d);
+  margin-top: -10px;
+  transform: translate(-42px, 0) scale(var(--hint-scale, 1));
+}
+
+.balance-hint--right {
+  border-top: 10px solid transparent;
+  border-bottom: 10px solid transparent;
+  border-left: 14px solid var(--hint-color, #f1d28d);
+  margin-top: -10px;
+  transform: translate(28px, 0) scale(var(--hint-scale, 1));
+}
+
 #toast {
   position: absolute;
   top: 7.25rem;
