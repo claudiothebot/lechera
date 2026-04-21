@@ -11,3 +11,4 @@ dist
 # Source GLBs kept locally for editing; runtime loads *-opt.glb only (~76 MB saved in git).
 public/models/lechera-walk.glb
 public/models/lechera-tpose.glb
+.cursor/skills/threejs-gamedev
