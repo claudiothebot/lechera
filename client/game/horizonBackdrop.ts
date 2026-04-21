@@ -118,10 +118,29 @@ function buildForestSilhouetteTexture(): THREE.CanvasTexture {
       const trunkShift = (r() - 0.5) * trunkW * 0.35;
       const trunkX = cx - trunkW * 0.5 + trunkShift;
       const trunkTop = layer.baseY - 2;
+      // Short trunks (distant poplar read): only a small stem below the
+      // canopy, not a tall rectangle to the texture bottom — that read as
+      // fence posts. A short fade under the stump blends into the cylinder
+      // base without a hard cut-out to transparent.
+      const trunkDepthPx = 6 + r() * 10;
+      const trunkBottom = trunkTop + trunkDepthPx;
+      const fadeH = 8 + r() * 8;
 
-      // Trunk: narrow vertical bar, always neutral wood tone (never green).
       ctx.fillStyle = layer.trunkColor;
-      ctx.fillRect(trunkX, trunkTop, trunkW, h - trunkTop);
+      ctx.fillRect(trunkX, trunkTop, trunkW, trunkDepthPx);
+
+      ctx.save();
+      ctx.translate(trunkX, trunkBottom);
+      const n = parseInt(layer.trunkColor.slice(1), 16);
+      const rr = (n >> 16) & 255;
+      const gg = (n >> 8) & 255;
+      const bb = n & 255;
+      const g = ctx.createLinearGradient(0, 0, 0, fadeH);
+      g.addColorStop(0, layer.trunkColor);
+      g.addColorStop(1, `rgba(${rr},${gg},${bb},0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, trunkW, fadeH);
+      ctx.restore();
 
       // Canopy: green blobs only above the trunk join.
       ctx.fillStyle = layer.canopyColor;
