@@ -17,7 +17,7 @@ const cx = level.worldBoundary.centerX;
 const cz = level.worldBoundary.centerZ;
 const R = level.worldBoundary.radius;
 
-const TARGET_GAP_DEG = 3;
+const TARGET_GAP_DEG = 1.5;
 const RING_R_MIN = 63;
 const RING_R_MAX = 74;
 const VARIANTS = ['poplar', 'poplar-alt'];
