@@ -150,9 +150,11 @@ export function createHorizonBackdrop(options: HorizonBackdropOptions): THREE.Me
     depthWrite: false,
     // Rendered from inside the cylinder: flip which face the renderer keeps.
     side: THREE.BackSide,
-    // Fog is applied by MeshBasicMaterial automatically (`fog: true` default)
-    // so the backdrop dissolves into the fog tint as `far` is approached.
-    fog: true,
+    // No scene fog on this mesh: the cylinder sits mid-distance; linear fog
+    // with a sky-bright colour was washing the silhouette to grey/white at
+    // the base. Terrain + hills still get fog for depth; the forest strip
+    // stays a readable dark green band in front of the relief.
+    fog: false,
     toneMapped: true,
   });
 

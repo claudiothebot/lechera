@@ -247,16 +247,15 @@ async function boot() {
   // forest silhouette around the playable area. Cheapest way to fill the
   // empty band between props and sky.
   //
-  // Radius 110 m sits in the flat guard band between the world boundary
-  // (55 m) and the mountain ridge (starts rising at 125 m, peaks at ~340 m),
-  // so the backdrop reads as a close forest line with the mountain relief
-  // visible behind it. Partly fogged by the scene fog (near = 85), giving
-  // atmospheric haze without washing out the silhouette.
+  // Radius ~96 m sits in the flat guard band before the mountain ridge
+  // (starts rising at 125 m), close enough to read as a near treeline. The
+  // mesh opts out of scene fog so the silhouette stays green; hills still
+  // use fog in bootstrap for softer distance.
   if (decorEnabled) {
     const boundary = level.definition.worldBoundary;
     const backdrop = createHorizonBackdrop({
-      radius: 110,
-      height: 22,
+      radius: 96,
+      height: 24,
       bottomY: -1,
       centerX: boundary.centerX,
       centerZ: boundary.centerZ,

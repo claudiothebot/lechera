@@ -23,13 +23,13 @@ export function createBootstrap(canvas: HTMLCanvasElement): Bootstrap {
   // Daylight-ish placeholder (matches the mean tone of our HDRI) so the sky
   // still reads well during the brief window before installHdriSky resolves.
   scene.background = new THREE.Color(0xa7c3d9);
-  // Linear fog chosen to tint distant geometry without touching the playable
-  // area. `near` sits safely past the world-boundary radius (~55 m) so the
-  // village and props read at full contrast; `far` matches the ring where
-  // the horizon backdrop lives so the backdrop fades into the sky instead of
-  // cutting hard against it. Colour = mean tone of the HDRI horizon so the
-  // haze doesn't look tinted.
-  scene.fog = new THREE.Fog(0xbfd8ef, 85, 220);
+  // Linear fog: only a light atmospheric perspective on the *relief ring*
+  // (ridge peaks sit ~300–400 m out). If `far` is too short or the colour is
+  // as bright as the sky, distant hills hit 100 % fog and read as white
+  // blobs. Keep `near` past gameplay (~55 m) so the village stays crisp;
+  // push `far` past the ridge; tint muted blue-green so hills blend toward
+  // haze, not toward paper-white.
+  scene.fog = new THREE.Fog(0x8a9f90, 100, 420);
 
   const camera = new THREE.PerspectiveCamera(
     60,
