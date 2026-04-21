@@ -22,6 +22,14 @@ export interface InputSystem {
   /** Mouse delta since last call. Accumulates only while free-look is held. */
   consumeLookDelta(): { dx: number; dy: number };
   consumeRestart(): boolean;
+  /**
+   * Returns `true` once per Space / Enter press, consuming the queued
+   * event. The HUD uses this to toggle the instructions panel. Both
+   * keys are otherwise unbound in gameplay — Enter is wired alongside
+   * Space because it's the reflex key most players reach for on a
+   * "press any key" overlay.
+   */
+  consumeToggleHelp(): boolean;
   dispose(): void;
 }
 
@@ -38,6 +46,7 @@ export function createInputSystem(canvas: HTMLCanvasElement): InputSystem {
   let freeLook = false;
   let freeLookPointerId: number | null = null;
   let restartQueued = false;
+  let toggleHelpQueued = false;
   let engaged = false;
 
   const markEngaged = () => {
@@ -48,6 +57,31 @@ export function createInputSystem(canvas: HTMLCanvasElement): InputSystem {
     const k = e.key.toLowerCase();
     keys.add(k);
     if (k === 'r') restartQueued = true;
+    // Space / Enter toggles the instructions panel. Neither counts as
+    // "engagement" — opening help shouldn't fade the hint pill; that
+    // should only happen when the player actually starts playing
+    // (WASD / arrows / mouse look).
+    //
+    // Guard against swallowing Enter while the name modal (or any
+    // future form input) has focus: if the event came from a text
+    // field, the player is typing their name, not toggling help.
+    const target = e.target as HTMLElement | null;
+    const isTypingIntoForm =
+      !!target &&
+      (target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable);
+    if (
+      !isTypingIntoForm &&
+      (k === ' ' ||
+        e.key === 'Space' ||
+        e.code === 'Space' ||
+        e.key === 'Enter' ||
+        e.code === 'Enter')
+    ) {
+      toggleHelpQueued = true;
+      e.preventDefault();
+    }
     if (k.startsWith('arrow') || k === 'w' || k === 'a' || k === 's' || k === 'd') {
       markEngaged();
     }
@@ -136,6 +170,13 @@ export function createInputSystem(canvas: HTMLCanvasElement): InputSystem {
     consumeRestart() {
       if (restartQueued) {
         restartQueued = false;
+        return true;
+      }
+      return false;
+    },
+    consumeToggleHelp() {
+      if (toggleHelpQueued) {
+        toggleHelpQueued = false;
         return true;
       }
       return false;

@@ -91,6 +91,21 @@ export interface Hud {
   setStatus(status: GameStatus, ctx?: GameOverContext): void;
   setLocked(locked: boolean): void;
   /**
+   * Show / hide the central instructions panel (keyboard + jug diagram).
+   * The panel is visible at boot and auto-hides on first engagement;
+   * Space toggles it explicitly after that. Separate from `setLocked`
+   * (the bottom "Space · controls" hint pill) on purpose — the hint
+   * stays visible while the panel is open and vice versa.
+   */
+  setInstructionsVisible(visible: boolean): void;
+  /**
+   * Toggle the instructions panel open/closed. Returns the new state
+   * (`true` = visible). Cheap — reads a DOM class list.
+   */
+  toggleInstructions(): boolean;
+  /** Whether the instructions overlay is currently visible (for conditional HUD renders). */
+  getInstructionsVisible(): boolean;
+  /**
    * Milk on the jug (`carrying`) and total deliveries completed (`delivered`;
    * same meaning as in the game-over summary).
    */
@@ -176,6 +191,9 @@ export function createHud(): Hud {
     document.querySelector<HTMLElement>('#scoreboard-countdown')!;
   const leaderboardList =
     document.querySelector<HTMLOListElement>('#leaderboard-list')!;
+  const instructionsPanel = document.querySelector<HTMLElement>(
+    '#instructions-panel',
+  )!;
   const balanceHints = document.querySelector<HTMLElement>('#balance-hints')!;
   const balanceHintUp = balanceHints.querySelector<HTMLElement>('.balance-hint--up')!;
   const balanceHintDown = balanceHints.querySelector<HTMLElement>('.balance-hint--down')!;
@@ -350,6 +368,20 @@ export function createHud(): Hud {
   const setLocked: Hud['setLocked'] = (locked) => {
     hintEl.classList.toggle('hidden', locked);
   };
+
+  let instructionsVisible = !instructionsPanel.classList.contains('hidden');
+  const setInstructionsVisible: Hud['setInstructionsVisible'] = (visible) => {
+    if (visible === instructionsVisible) return;
+    instructionsVisible = visible;
+    instructionsPanel.classList.toggle('hidden', !visible);
+    instructionsPanel.setAttribute('aria-hidden', visible ? 'false' : 'true');
+  };
+  const toggleInstructions: Hud['toggleInstructions'] = () => {
+    setInstructionsVisible(!instructionsVisible);
+    return instructionsVisible;
+  };
+  const getInstructionsVisible: Hud['getInstructionsVisible'] = () =>
+    instructionsVisible;
 
   const setMilkStats: Hud['setMilkStats'] = (carrying, delivered) => {
     if (carrying === lastCarrying && delivered === lastDelivered) return;
@@ -593,6 +625,9 @@ export function createHud(): Hud {
     setDistance,
     setStatus,
     setLocked,
+    setInstructionsVisible,
+    toggleInstructions,
+    getInstructionsVisible,
     setMilkStats,
     setDreamLabel,
     setTime,

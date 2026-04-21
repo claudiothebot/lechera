@@ -41,6 +41,7 @@ import { createCameraRig } from './render/cameraRig';
 import { installHdriSky } from './render/sky';
 import { createHud, type GameStatus } from './ui/hud';
 import { createDreamPreview } from './ui/dreamPreview';
+import { createInstructionsPreview } from './ui/instructionsPreview';
 import { createMinimap } from './ui/minimap';
 import { installMusicLoop } from './audio/music';
 import {
@@ -324,6 +325,7 @@ async function boot() {
   } else {
     dreamPreviewWrap.style.display = 'none';
   }
+  let instructionsPreview: ReturnType<typeof createInstructionsPreview> | null = null;
   const progression = createProgression();
 
   const loadingEl = document.getElementById('loading-screen');
@@ -351,6 +353,17 @@ async function boot() {
     });
     player.setVisual(character.root);
     player.setJugVisual(jugRoot);
+
+    const instructionsCanvas = document.querySelector<HTMLCanvasElement>(
+      '#instructions-preview-canvas',
+    );
+    if (instructionsCanvas) {
+      instructionsPreview = createInstructionsPreview(
+        instructionsCanvas,
+        characterSource,
+        jugSource,
+      );
+    }
   } catch (err) {
     console.error('[assets] failed to load milkmaid / jug GLB', err);
     if (loadingEl) {
@@ -580,6 +593,13 @@ async function boot() {
   hud.setStatus(status);
   hud.setTime(timeRemaining);
   hud.setRound(localRoundCounter);
+
+  // Instructions panel: shown on boot, fades away the first time the
+  // player touches a movement key / free-look. Any explicit Space toggle
+  // afterwards is a deliberate request — we stop the auto-hide so the
+  // panel only closes when the player closes it themselves.
+  hud.setInstructionsVisible(true);
+  let autoHidePending = true;
 
   const clock = new THREE.Clock();
 
@@ -844,6 +864,18 @@ async function boot() {
     // movement key or started free-looking). No pointer lock involved
     // anymore — the HUD just fades the help text out.
     hud.setLocked(input.hasEngaged);
+    // First real engagement auto-dismisses the instructions panel so it
+    // doesn't block the player's first move. Space can still re-open it
+    // afterwards; any Space press disables the auto-hide so a panel
+    // opened on purpose won't get stolen away by the next keystroke.
+    if (autoHidePending && input.hasEngaged) {
+      autoHidePending = false;
+      hud.setInstructionsVisible(false);
+    }
+    if (input.consumeToggleHelp()) {
+      hud.toggleInstructions();
+      autoHidePending = false;
+    }
 
     if (input.consumeRestart()) restart();
 
@@ -1231,6 +1263,9 @@ async function boot() {
 
     renderer.render(scene, camera);
     dreamPreview?.render(dt);
+    if (hud.getInstructionsVisible()) {
+      instructionsPreview?.render(dt);
+    }
   });
 }
 

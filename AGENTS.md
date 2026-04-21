@@ -37,7 +37,8 @@ robust for casual internet play.
 
 - Desktop third-person controls:
   `W/S` move, `A/D` turn, arrow keys balance the jug, hold left mouse to
-  free-look, `R` restart. There is **no pointer lock** anymore.
+  free-look, `R` restart, `Space` / `Enter` toggle the instructions panel. There
+  is **no pointer lock** anymore.
 - Single-player remains fully playable offline. Multiplayer is opt-in and
   non-blocking: if the server is unreachable, the local game keeps running.
 - Dream progression is real now: different dreams, different jug scales,

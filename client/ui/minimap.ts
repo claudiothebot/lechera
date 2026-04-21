@@ -15,9 +15,19 @@ import type { Obstacle } from '../game/level';
 /** Radius in world metres visible from the centre to the edge of the radar. */
 const RADAR_RADIUS_M = 40;
 /** CSS pixel size of the circular canvas (square bounding box). */
-const SIZE = 130;
+const SIZE = 180;
 /** Inset from the edge where clamped off-screen arrows are drawn. */
-const EDGE_INSET = 8;
+const EDGE_INSET = 10;
+
+/** Goal-marker tuning (single source of truth for the "dream" on the radar). */
+const GOAL_COLOR = '#ffd86b';
+const GOAL_OUTLINE = 'rgba(10, 10, 18, 0.85)';
+const GOAL_DOT_R = 5.5;
+const GOAL_HALO_R = 13;
+/** Pulse period (seconds) for the in-range attention ring. */
+const GOAL_PULSE_PERIOD_S = 1.4;
+/** Outer radius the pulse ring expands to at peak. */
+const GOAL_PULSE_MAX_R = 22;
 
 export interface MinimapRemote {
   /** World position of the remote player. */
@@ -129,10 +139,10 @@ export function createMinimap(canvas: HTMLCanvasElement): Minimap {
       }
     }
 
-    // Goal: filled dot with a soft halo when in range; clamped arrow at
-    // the radar edge otherwise. The arrow rotation pins its tip to the
-    // outward direction so the player always has a "keep going that way"
-    // hint even when the goal is off-screen.
+    // Goal marker ("the dream"):
+    //  - In-range: pulsing outer ring + filled halo + core dot, all with a
+    //    dark outline so it pops against grass / obstacle tints.
+    //  - Off-range: larger clamped arrow with dark outline.
     const goalDxWorld = state.goal.x - state.playerX;
     const goalDzWorld = state.goal.z - state.playerZ;
     const goalDist = Math.hypot(goalDxWorld, goalDzWorld);
@@ -141,30 +151,55 @@ export function createMinimap(canvas: HTMLCanvasElement): Minimap {
     const edgePx = SIZE / 2 - EDGE_INSET;
 
     if (goalDist <= RADAR_RADIUS_M) {
-      ctx!.fillStyle = 'rgba(241, 210, 141, 0.3)';
+      // Pulse: triangle wave in [0, 1] with period GOAL_PULSE_PERIOD_S.
+      // Sine-based would give more "breathing" but a linear ramp reads as
+      // a confident beacon pulse at low period.
+      const t = performance.now() / 1000;
+      const phase =
+        ((t % GOAL_PULSE_PERIOD_S) + GOAL_PULSE_PERIOD_S) %
+        GOAL_PULSE_PERIOD_S /
+        GOAL_PULSE_PERIOD_S; // 0 → 1 → 0…
+      const pulseR = GOAL_HALO_R + (GOAL_PULSE_MAX_R - GOAL_HALO_R) * phase;
+      const pulseA = 0.55 * (1 - phase);
+      ctx!.strokeStyle = `rgba(255, 216, 107, ${pulseA.toFixed(3)})`;
+      ctx!.lineWidth = 2;
       ctx!.beginPath();
-      ctx!.arc(goalDx, goalDz, 8, 0, Math.PI * 2);
-      ctx!.fill();
-      ctx!.fillStyle = '#f1d28d';
+      ctx!.arc(goalDx, goalDz, pulseR, 0, Math.PI * 2);
+      ctx!.stroke();
+
+      // Solid halo.
+      ctx!.fillStyle = 'rgba(255, 216, 107, 0.28)';
       ctx!.beginPath();
-      ctx!.arc(goalDx, goalDz, 3.5, 0, Math.PI * 2);
+      ctx!.arc(goalDx, goalDz, GOAL_HALO_R, 0, Math.PI * 2);
       ctx!.fill();
+
+      // Core dot with dark outline for contrast against the map.
+      ctx!.fillStyle = GOAL_COLOR;
+      ctx!.strokeStyle = GOAL_OUTLINE;
+      ctx!.lineWidth = 1.4;
+      ctx!.beginPath();
+      ctx!.arc(goalDx, goalDz, GOAL_DOT_R, 0, Math.PI * 2);
+      ctx!.fill();
+      ctx!.stroke();
     } else {
       const mag = Math.hypot(goalDx, goalDz) || 1;
       const ex = (goalDx / mag) * edgePx;
       const ez = (goalDz / mag) * edgePx;
       ctx!.save();
       ctx!.translate(ex, ez);
-      // Triangle local apex at (0, -6) → we rotate so that apex points
+      // Triangle local apex at (0, -9) → we rotate so that apex points
       // along the outward direction (atan2(ez, ex) + π/2 brings -Y there).
       ctx!.rotate(Math.atan2(ez, ex) + Math.PI / 2);
-      ctx!.fillStyle = '#f1d28d';
+      ctx!.fillStyle = GOAL_COLOR;
+      ctx!.strokeStyle = GOAL_OUTLINE;
+      ctx!.lineWidth = 1.4;
       ctx!.beginPath();
-      ctx!.moveTo(0, -6);
-      ctx!.lineTo(5, 4);
-      ctx!.lineTo(-5, 4);
+      ctx!.moveTo(0, -9);
+      ctx!.lineTo(7, 6);
+      ctx!.lineTo(-7, 6);
       ctx!.closePath();
       ctx!.fill();
+      ctx!.stroke();
       ctx!.restore();
     }
 
@@ -173,23 +208,24 @@ export function createMinimap(canvas: HTMLCanvasElement): Minimap {
     // --- Overlay: screen-fixed ---
 
     // Cardinal tick at the top reinforces "up = the way the Lechera is facing".
-    ctx!.strokeStyle = 'rgba(241, 210, 141, 0.45)';
-    ctx!.lineWidth = 1.25;
+    ctx!.strokeStyle = 'rgba(241, 210, 141, 0.55)';
+    ctx!.lineWidth = 1.4;
     ctx!.beginPath();
-    ctx!.moveTo(0, -SIZE / 2 + 3);
-    ctx!.lineTo(0, -SIZE / 2 + 10);
+    ctx!.moveTo(0, -SIZE / 2 + 4);
+    ctx!.lineTo(0, -SIZE / 2 + 13);
     ctx!.stroke();
 
-    // Player triangle at the centre, always pointing up.
+    // Player triangle at the centre, always pointing up. Scales with the
+    // bigger radar so it doesn't read as a pinprick next to the goal halo.
     ctx!.fillStyle = '#f7f4ec';
     ctx!.beginPath();
-    ctx!.moveTo(0, -6);
-    ctx!.lineTo(5, 5);
-    ctx!.lineTo(-5, 5);
+    ctx!.moveTo(0, -8);
+    ctx!.lineTo(6.5, 6);
+    ctx!.lineTo(-6.5, 6);
     ctx!.closePath();
     ctx!.fill();
-    ctx!.strokeStyle = 'rgba(10, 10, 18, 0.75)';
-    ctx!.lineWidth = 1;
+    ctx!.strokeStyle = 'rgba(10, 10, 18, 0.8)';
+    ctx!.lineWidth = 1.2;
     ctx!.stroke();
 
     ctx!.restore();
