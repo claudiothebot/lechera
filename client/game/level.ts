@@ -16,7 +16,12 @@ import {
   type LevelDefinition,
   type LevelPathDefinition,
 } from './levelDefinition';
-import { loadTreeModel, TREE_SCATTER_WORLD_SCALE, TREE_VARIANT_URLS } from './treeModel';
+import {
+  loadTreeModel,
+  TREE_SCATTER_WORLD_SCALE,
+  TREE_VARIANT_SCATTER_SCALE,
+  TREE_VARIANT_URLS,
+} from './treeModel';
 import type { InstancedTreePlacement, TreeModel } from './treeModel';
 import type { TreeVariantKind } from './levelDefinition';
 
@@ -696,18 +701,24 @@ export async function loadLevelTrees(
   const modelPairs = await Promise.all(
     uniqueVariants.map(async (variant) => {
       const url = TREE_VARIANT_URLS[variant];
-      const model = await loadTreeModel(url);
+      // Scattered foliage doesn't need to receive shadows: the canopy sits
+      // well above the player, and skipping the shadow-map sample on tens
+      // of thousands of fragments per frame is a clear perf win.
+      const variantScale = TREE_VARIANT_SCATTER_SCALE[variant];
+      const model = await loadTreeModel(url, {
+        receiveShadow: false,
+        worldScale: TREE_SCATTER_WORLD_SCALE * variantScale,
+      });
       return [variant, model] as const;
     }),
   );
   const models = new Map<TreeVariantKind, TreeModel>(modelPairs);
 
-  // Trunk collider radius, in metres. The visual trunk is slender and the
-  // canopy sits well above the player's head, so the collider is kept
-  // deliberately tight — brushing a tree should only trigger when you are
-  // effectively walking through the trunk. Scales with the world-scale
-  // applied to scattered trees so variants stay in proportion.
-  const trunkR = 0.16 * TREE_SCATTER_WORLD_SCALE;
+  // Trunk collider radius baseline (metres). Multiplied per variant by the
+  // same scatter scale the visual mesh uses so a bigger tree also gets a
+  // thicker trunk collider. Intentionally tight: brushing a tree should
+  // only trigger when the player is effectively walking through the trunk.
+  const TRUNK_COLLIDER_BASE = 0.16;
   // Chunk the forest so frustum culling can reject whole patches. One giant
   // InstancedMesh per variant keeps draw calls low, but it also means the
   // renderer ends up touching essentially every tree every frame because the
@@ -752,7 +763,10 @@ export async function loadLevelTrees(
     // Collision still uses one AABB per tree; the `visual` reference is
     // shared across the chunk (the obstacle system only uses `visual` to swap
     // placeholder boxes when a house GLB resolves, which trees never do, so
-    // sharing is safe).
+    // sharing is safe). Collider radius tracks the variant's scatter scale
+    // so bigger-looking trees also feel thicker to walk into.
+    const trunkR =
+      TRUNK_COLLIDER_BASE * TREE_SCATTER_WORLD_SCALE * TREE_VARIANT_SCATTER_SCALE[variant];
     for (const p of chunkPlacements) {
       newObstacles.push({
         center: new THREE.Vector3(p.x, model.halfY, p.z),

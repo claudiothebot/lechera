@@ -61,6 +61,13 @@ export interface LoadTreeModelOptions {
   /** Ground props usually cast shadows; trees stay off for perf. */
   castShadow?: boolean;
   /**
+   * Whether meshes should receive shadows. Props on the ground benefit from
+   * the player's shadow landing on them (default). Scattered trees turn this
+   * off to skip a shadow-map sample per fragment on ~tens of thousands of
+   * canopy pixels — a pure perf win with no visible cost on foliage.
+   */
+  receiveShadow?: boolean;
+  /**
    * Extra uniform scale vs GLB (default **2** = +100 % for scattered trees).
    * Props use **1** so only trees grow.
    */
@@ -69,6 +76,19 @@ export interface LoadTreeModelOptions {
 
 /** +100 % on export size for scattered trees (`loadLevelTrees`). Props pass `worldScale: 1`. */
 export const TREE_SCATTER_WORLD_SCALE = 2;
+
+/**
+ * Per-variant extra multiplier on top of `TREE_SCATTER_WORLD_SCALE`. Olives
+ * stay at their authored size; the two poplar variants are grown so the
+ * skyline has some variety between low bushy shapes and taller columnar
+ * ones. Keep this as authored data rather than baking size into the GLB
+ * so we can re-export meshes without re-tuning the scene.
+ */
+export const TREE_VARIANT_SCATTER_SCALE: Record<TreeVariantKind, number> = {
+  olive: 1.0,
+  poplar: 1.3,
+  'poplar-alt': 1.8,
+};
 
 /** Leaf mesh + its matrix relative to a wrapper-at-origin reference frame. */
 interface LeafMesh {
@@ -82,17 +102,26 @@ export async function loadTreeModel(
   options: LoadTreeModelOptions = {},
 ): Promise<TreeModel> {
   const castShadow = options.castShadow ?? false;
+  const receiveShadow = options.receiveShadow ?? true;
   const worldScale = options.worldScale ?? TREE_SCATTER_WORLD_SCALE;
   const loader = new GLTFLoader();
   loader.setMeshoptDecoder(MeshoptDecoder);
   const gltf = await loader.loadAsync(url);
   const scene = gltf.scene;
 
+  // Meshy's remeshed exports come with `doubleSided: true` on every material
+  // by default. For opaque trunks/foliage/props that means the fragment
+  // shader runs on both faces — roughly 2× fill cost for zero visible gain.
+  // Force FrontSide at load time so this is correct regardless of what the
+  // source GLB declared (and so future re-exports don't reintroduce it).
   scene.traverse((obj) => {
     const m = obj as THREE.Mesh;
-    if (m.isMesh) {
-      m.castShadow = castShadow;
-      m.receiveShadow = true;
+    if (!m.isMesh) return;
+    m.castShadow = castShadow;
+    m.receiveShadow = receiveShadow;
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    for (const mat of mats) {
+      if (mat) mat.side = THREE.FrontSide;
     }
   });
 
