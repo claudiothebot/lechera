@@ -17,6 +17,7 @@ import { MilkDreamsRoom } from './rooms/MilkDreamsRoom.js';
 import { getLeaderboardStore } from './persistence/supabase.js';
 
 const PORT = Number(process.env.PORT ?? 2567);
+const HOST = process.env.HOST ?? '127.0.0.1';
 
 const app = express();
 
@@ -132,6 +133,6 @@ const gameServer = new Server({
 
 gameServer.define('milk-dreams', MilkDreamsRoom);
 
-gameServer.listen(PORT).then(() => {
-  console.log(`[server] milk-dreams listening on ws://localhost:${PORT}`);
+httpServer.listen(PORT, HOST, () => {
+  console.log(`[server] milk-dreams listening on ws://${HOST}:${PORT}`);
 });

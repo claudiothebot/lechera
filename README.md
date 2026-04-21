@@ -21,6 +21,7 @@ Open the printed URL from `pnpm dev`.
 
 - Local single-player works with just the Vite client.
 - Optional multiplayer uses the Colyseus server on `ws://localhost:2567`.
+- Production builds can bake the WS endpoint via `VITE_MULTIPLAYER_URL` (see `.env.production`).
 - The browser level editor is available at `?editor=1`.
 
 ## Controls

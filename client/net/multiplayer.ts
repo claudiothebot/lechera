@@ -720,5 +720,7 @@ function resolveEndpoint(override?: string): string {
   // against a remote server during a LAN party.
   const param = new URLSearchParams(window.location.search).get('mp');
   if (param) return param;
+  const env = (import.meta.env.VITE_MULTIPLAYER_URL ?? '').trim();
+  if (env) return env;
   return DEFAULT_ENDPOINT;
 }
