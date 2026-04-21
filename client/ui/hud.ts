@@ -144,7 +144,16 @@ export interface Hud {
    * round. Pass `null` to hide.
    */
   showScoreboard(entries: ScoreboardEntry[], secondsLeft: number): void;
+  /**
+   * Open the scoreboard overlay in "on-demand ranking" mode: same
+   * entries/leaderboard layout as the between-rounds view, but titled
+   * "Ranking" and without the countdown subtitle (there's no next-round
+   * deadline — the player opened this panel themselves).
+   */
+  showRanking(entries: ScoreboardEntry[]): void;
   hideScoreboard(): void;
+  /** True while the scoreboard/ranking overlay is up (either variant). */
+  isScoreboardVisible(): boolean;
   /**
    * Update only the countdown number on the visible scoreboard.
    * Cheap (DOM single-text-node update); call every frame while the
@@ -165,7 +174,24 @@ export interface Hud {
   ): void;
 }
 
-export function createHud(): Hud {
+export interface HudOptions {
+  /**
+   * Called when the player clicks the "Instructions" HUD button.
+   * Equivalent to a Space / Enter press — the caller is expected to
+   * call `hud.toggleInstructions()` and disable any auto-hide logic
+   * so the panel stays up until dismissed.
+   */
+  onInstructionsClick?: () => void;
+  /**
+   * Called when the player clicks the "Ranking" HUD button. The
+   * caller decides whether to open the overlay (via `showRanking`)
+   * with the current-round entries + all-time leaderboard, or close
+   * it (via `hideScoreboard`) if already visible.
+   */
+  onRankingClick?: () => void;
+}
+
+export function createHud(options: HudOptions = {}): Hud {
   const spillValue = document.querySelector<HTMLElement>('#spill-value')!;
   const balanceLabel = document.querySelector<HTMLElement>('#balance-label')!;
   const spillBar = document.querySelector<HTMLElement>('#spill-bar')!;
@@ -185,6 +211,10 @@ export function createHud(): Hud {
   const netBadgeFlag = netBadge.querySelector<HTMLElement>('.net-badge__flag')!;
   const netBadgeText = netBadge.querySelector<HTMLElement>('.net-badge__text')!;
   const scoreboard = document.querySelector<HTMLElement>('#scoreboard')!;
+  const scoreboardTitle =
+    document.querySelector<HTMLElement>('#scoreboard-title')!;
+  const scoreboardSubtitle =
+    document.querySelector<HTMLElement>('#scoreboard-subtitle')!;
   const scoreboardList =
     document.querySelector<HTMLOListElement>('#scoreboard-list')!;
   const scoreboardCountdown =
@@ -194,6 +224,16 @@ export function createHud(): Hud {
   const instructionsPanel = document.querySelector<HTMLElement>(
     '#instructions-panel',
   )!;
+  const instructionsBackdrop = instructionsPanel.querySelector<HTMLElement>(
+    '.instructions-panel__backdrop',
+  );
+  const scoreboardBackdrop = scoreboard.querySelector<HTMLElement>(
+    '.scoreboard__backdrop',
+  );
+  const instructionsButton =
+    document.querySelector<HTMLButtonElement>('#hud-action-instructions');
+  const rankingButton =
+    document.querySelector<HTMLButtonElement>('#hud-action-ranking');
   const balanceHints = document.querySelector<HTMLElement>('#balance-hints')!;
   const balanceHintUp = balanceHints.querySelector<HTMLElement>('.balance-hint--up')!;
   const balanceHintDown = balanceHints.querySelector<HTMLElement>('.balance-hint--down')!;
@@ -370,11 +410,20 @@ export function createHud(): Hud {
   };
 
   let instructionsVisible = !instructionsPanel.classList.contains('hidden');
+  const syncInstructionsButton = (): void => {
+    instructionsButton?.classList.toggle('is-active', instructionsVisible);
+    instructionsButton?.setAttribute(
+      'aria-expanded',
+      instructionsVisible ? 'true' : 'false',
+    );
+  };
+  syncInstructionsButton();
   const setInstructionsVisible: Hud['setInstructionsVisible'] = (visible) => {
     if (visible === instructionsVisible) return;
     instructionsVisible = visible;
     instructionsPanel.classList.toggle('hidden', !visible);
     instructionsPanel.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    syncInstructionsButton();
   };
   const toggleInstructions: Hud['toggleInstructions'] = () => {
     setInstructionsVisible(!instructionsVisible);
@@ -382,6 +431,21 @@ export function createHud(): Hud {
   };
   const getInstructionsVisible: Hud['getInstructionsVisible'] = () =>
     instructionsVisible;
+
+  // Wire the two HUD buttons once. The callbacks own state transitions
+  // so hud.ts doesn't need to know about multiplayer / autoHidePending.
+  instructionsButton?.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    // Buttons live inside the always-focusable HUD; blurring them after
+    // click prevents Space/Enter from re-triggering via :focus.
+    instructionsButton.blur();
+    options.onInstructionsClick?.();
+  });
+  rankingButton?.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    rankingButton.blur();
+    options.onRankingClick?.();
+  });
 
   const setMilkStats: Hud['setMilkStats'] = (carrying, delivered) => {
     if (carrying === lastCarrying && delivered === lastDelivered) return;
@@ -503,7 +567,7 @@ export function createHud(): Hud {
     scoreboardCountdown.textContent = String(s);
   };
 
-  const showScoreboard: Hud['showScoreboard'] = (entries, secondsLeft) => {
+  const renderScoreboardEntries = (entries: ScoreboardEntry[]): void => {
     // Rebuild the list from scratch — it only changes once per round
     // end (5–20 entries), so DOM diffing isn't worth the complexity.
     scoreboardList.replaceChildren();
@@ -539,16 +603,57 @@ export function createHud(): Hud {
 
       scoreboardList.appendChild(li);
     }
-    lastScoreboardCountdown = -1;
-    renderScoreboardCountdown(secondsLeft);
+  };
+
+  const revealScoreboard = (): void => {
     scoreboard.classList.remove('hidden');
     scoreboard.setAttribute('aria-hidden', 'false');
+    rankingButton?.classList.add('is-active');
+    rankingButton?.setAttribute('aria-expanded', 'true');
+  };
+
+  const showScoreboard: Hud['showScoreboard'] = (entries, secondsLeft) => {
+    renderScoreboardEntries(entries);
+    scoreboardTitle.textContent = 'Round over';
+    scoreboardSubtitle.hidden = false;
+    // Re-hydrate the countdown span (it gets swapped out of the DOM in
+    // ranking mode where the whole subtitle is replaced wholesale).
+    scoreboardSubtitle.replaceChildren(
+      document.createTextNode('Next in '),
+      scoreboardCountdown,
+      document.createTextNode('s'),
+    );
+    lastScoreboardCountdown = -1;
+    renderScoreboardCountdown(secondsLeft);
+    revealScoreboard();
+  };
+
+  const showRanking: Hud['showRanking'] = (entries) => {
+    renderScoreboardEntries(entries);
+    scoreboardTitle.textContent = 'Ranking';
+    // No deadline to show: the player opened this themselves. Hide the
+    // subtitle rather than emptying it so the panel keeps compact
+    // vertical rhythm with the list below.
+    scoreboardSubtitle.hidden = true;
+    revealScoreboard();
   };
 
   const hideScoreboard: Hud['hideScoreboard'] = () => {
     scoreboard.classList.add('hidden');
     scoreboard.setAttribute('aria-hidden', 'true');
+    rankingButton?.classList.remove('is-active');
+    rankingButton?.setAttribute('aria-expanded', 'false');
   };
+
+  const isScoreboardVisible: Hud['isScoreboardVisible'] = () =>
+    !scoreboard.classList.contains('hidden');
+
+  instructionsBackdrop?.addEventListener('click', () => {
+    setInstructionsVisible(false);
+  });
+  scoreboardBackdrop?.addEventListener('click', () => {
+    hideScoreboard();
+  });
 
   const setScoreboardCountdown: Hud['setScoreboardCountdown'] = (
     secondsLeft,
@@ -636,7 +741,9 @@ export function createHud(): Hud {
     setDebugInvincible,
     setNetStatus,
     showScoreboard,
+    showRanking,
     hideScoreboard,
+    isScoreboardVisible,
     setScoreboardCountdown,
     setAllTimeLeaderboard,
   };

@@ -242,6 +242,70 @@ body {
     hue-rotate(10deg);
 }
 
+/* Two HUD buttons under the milk stack: mirrors Space/Enter (Instructions)
+   and opens an on-demand ranking overlay. Pointer-events opt-in because
+   #hud is transparent to clicks by default. */
+.hud-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  justify-content: center;
+  align-items: stretch;
+  width: 100%;
+  margin-top: -0.35rem;
+}
+
+.hud-action {
+  flex: 0 0 auto;
+  min-width: 0;
+  width: 100%;
+  pointer-events: auto;
+  cursor: pointer;
+  padding: 0.38rem 0.55rem;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(247, 244, 236, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 2px 6px rgba(0, 0, 0, 0.3);
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 60ms ease;
+}
+
+.hud-action:hover {
+  background: rgba(241, 210, 141, 0.16);
+  border-color: rgba(241, 210, 141, 0.55);
+  color: var(--accent);
+}
+
+.hud-action:active {
+  transform: translateY(1px);
+}
+
+.hud-action:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 0 2px rgba(241, 210, 141, 0.35);
+}
+
+.hud-action.is-active {
+  background: rgba(241, 210, 141, 0.22);
+  border-color: rgba(241, 210, 141, 0.7);
+  color: var(--accent);
+}
+
 /* DEBUG_INVINCIBLE: short cheat-code label (no rule; spacing from card gap). */
 .hud-playtest-hint {
   margin: 0;
@@ -638,10 +702,9 @@ body {
 
 /*
  * Instructions panel — centered overlay shown on boot (replaces the old
- * inline hint row). Toggled via Space. Non-blocking: it only catches
- * pointer events on the card itself; the rest of the HUD stays active
- * behind the backdrop, and WASD / arrows keep working while it's open
- * so the player can practice-read the diagram against the live game.
+ * inline hint row). Toggled via Space. The root keeps pointer-events: none
+ * so clicks pass through to the canvas except on the full-screen backdrop
+ * (closes the panel) and the card (content). WASD / arrows keep working.
  */
 .instructions-panel {
   position: absolute;
@@ -651,9 +714,6 @@ body {
   align-items: center;
   justify-content: center;
   pointer-events: none;
-  background: rgba(10, 10, 18, 0.48);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
   opacity: 1;
   visibility: visible;
   transition:
@@ -661,12 +721,25 @@ body {
     visibility 200ms ease;
 }
 
+.instructions-panel__backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: auto;
+  background: rgba(10, 10, 18, 0.48);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
 .instructions-panel.hidden {
   opacity: 0;
   visibility: hidden;
+  pointer-events: none;
 }
 
 .instructions-panel__card {
+  position: relative;
+  z-index: 1;
   pointer-events: auto;
   width: min(30rem, calc(100vw - 2rem));
   padding: 1.5rem 1.8rem 1.6rem;
@@ -972,10 +1045,9 @@ body.editor-active .instructions-panel {
 }
 
 /*
- * Scoreboard overlay — shown during the 'scoreboard' phase between
- * rounds in multiplayer. Centered card on top of the existing HUD,
- * non-blocking for inputs (we still want WASD to register so the next
- * round starts with the player already moving if they want to).
+ * Scoreboard overlay — between-rounds standings or on-demand Ranking.
+ * Same pattern as the instructions panel: root is pointer-through except
+ * the backdrop (click to dismiss) and the card.
  */
 .scoreboard {
   position: absolute;
@@ -985,20 +1057,31 @@ body.editor-active .instructions-panel {
   align-items: center;
   justify-content: center;
   pointer-events: none;
-  background: rgba(10, 10, 18, 0.55);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
   transition:
     opacity 220ms ease,
     visibility 220ms ease;
 }
 
+.scoreboard__backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: auto;
+  background: rgba(10, 10, 18, 0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
 .scoreboard.hidden {
   opacity: 0;
   visibility: hidden;
+  pointer-events: none;
 }
 
 .scoreboard__panel {
+  position: relative;
+  z-index: 1;
+  pointer-events: auto;
   min-width: 18rem;
   max-width: 28rem;
   padding: 1.4rem 1.6rem 1.6rem;

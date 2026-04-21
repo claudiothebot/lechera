@@ -88,6 +88,26 @@
                 </div>
               </div>
             </div>
+            <div id="hud-actions" class="hud-actions" role="group" aria-label="Open panel">
+              <button
+                type="button"
+                id="hud-action-instructions"
+                class="hud-action"
+                aria-haspopup="dialog"
+                aria-controls="instructions-panel"
+              >
+                Instructions
+              </button>
+              <button
+                type="button"
+                id="hud-action-ranking"
+                class="hud-action"
+                aria-haspopup="dialog"
+                aria-controls="scoreboard"
+              >
+                Ranking
+              </button>
+            </div>
             <p id="debug-playtest-hint" class="hud-playtest-hint hidden" aria-hidden="true">
               INVINCIBLE
             </p>
@@ -132,6 +152,7 @@
         </div>
 
         <div id="instructions-panel" class="instructions-panel" aria-hidden="false" role="dialog" aria-labelledby="instructions-title">
+          <div class="instructions-panel__backdrop" aria-hidden="true"></div>
           <div class="instructions-panel__card">
             <h2 id="instructions-title" class="instructions-panel__title">How to play</h2>
 
@@ -219,16 +240,17 @@
                   <span class="instructions-list__sep">/</span>
                   <kbd class="kbd kbd--wide">Enter</kbd>
                 </span>
-                <span class="instructions-list__text">toggle this panel</span>
+                <span class="instructions-list__text">toggle this panel, or click outside to close</span>
               </li>
             </ul>
           </div>
         </div>
 
         <div id="scoreboard" class="scoreboard hidden" aria-hidden="true">
+          <div class="scoreboard__backdrop" aria-hidden="true"></div>
           <div class="scoreboard__panel">
-            <div class="scoreboard__title">Round over</div>
-            <div class="scoreboard__subtitle">
+            <div id="scoreboard-title" class="scoreboard__title">Round over</div>
+            <div id="scoreboard-subtitle" class="scoreboard__subtitle">
               Next in <span id="scoreboard-countdown">10</span>s
             </div>
             <ol id="scoreboard-list" class="scoreboard__list"></ol>

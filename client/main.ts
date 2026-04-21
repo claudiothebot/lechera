@@ -295,7 +295,54 @@ async function boot() {
   const cameraRig = createCameraRig(camera);
   const balance = createJugBalance({ invincible: DEBUG_INVINCIBLE });
   const input = createInputSystem(canvas);
-  const hud = createHud();
+  // `createHud` is invoked up-front so subsequent bootstrap calls (e.g.
+  // `setDebugInvincible`, `setRound`) have an HUD to talk to. The click
+  // callbacks close over `let` bindings declared further down (`multi`,
+  // `autoHidePending`, `leaderboardHttpEndpoint`); a click is only
+  // possible after the DOM is live and the whole `boot()` body has
+  // executed, so those bindings are always initialized by then.
+  const hud = createHud({
+    onInstructionsClick: () => {
+      hud.toggleInstructions();
+      // Matches the Space / Enter path: any explicit toggle cancels the
+      // auto-hide so the panel stays open until the player dismisses it.
+      autoHidePending = false;
+    },
+    onRankingClick: () => {
+      if (hud.isScoreboardVisible()) {
+        hud.hideScoreboard();
+        return;
+      }
+      let entries = buildScoreboard(multi);
+      if (entries.length === 0) {
+        // Offline / pre-hydration: `multi` has no self view yet. Synth
+        // a local row from the client-side progression so the ranking
+        // is meaningful in single-player too.
+        entries = [
+          {
+            name: multi.selfName() ?? 'You',
+            litresDelivered: currentLitresDelivered(),
+            // Warm milk-jug yellow; matches the --accent hue family so
+            // the self dot reads as "the player" without a server-
+            // assigned colour.
+            colorHue: 0.13,
+            isSelf: true,
+          },
+        ];
+      }
+      hud.showRanking(entries);
+      // All-time leaderboard fetch is gated on a known HTTP endpoint
+      // (resolved once multiplayer hydrates). When we haven't got one
+      // yet, skip straight to the "empty" placeholder instead of
+      // stranding the panel on "Loading…".
+      if (leaderboardHttpEndpoint) {
+        hud.setAllTimeLeaderboard(null, multi.selfName());
+        void refreshLeaderboard(multi);
+      } else {
+        hud.setAllTimeLeaderboard([], multi.selfName());
+      }
+    },
+  });
   hud.setDebugInvincible(DEBUG_INVINCIBLE);
   const minimapWrap = document.querySelector<HTMLElement>('#minimap-wrap');
   if (!minimapWrap) throw new Error('#minimap-wrap not found');
