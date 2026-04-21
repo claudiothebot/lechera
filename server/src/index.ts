@@ -133,6 +133,6 @@ const gameServer = new Server({
 
 gameServer.define('milk-dreams', MilkDreamsRoom);
 
-httpServer.listen(PORT, HOST, () => {
+gameServer.listen(PORT, HOST).then(() => {
   console.log(`[server] milk-dreams listening on ws://${HOST}:${PORT}`);
 });
