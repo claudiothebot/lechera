@@ -265,10 +265,12 @@ export function createHud(): Hud {
     // A positive `tiltForward` means the jug leans forward -> player
     // must pull it back -> DOWN arrow is the corrective prompt.
     applyHintAxis(balanceHintUp, balanceHintDown, input.tiltForward, input.maxTilt);
-    applyHintAxis(balanceHintLeft, balanceHintRight, input.tiltRight, input.maxTilt);
+    // Lateral: `tiltRight` > 0 = lean camera-right → corrective key is left; list
+    // (positive, negative) maps lean-on-positive to the "negative" arrow node.
+    applyHintAxis(balanceHintRight, balanceHintLeft, input.tiltRight, input.maxTilt);
 
-    // `translate3d` promotes onto its own layer and avoids layout reflow.
-    balanceHints.style.transform = `translate3d(${input.screenX}px, ${input.screenY}px, 0)`;
+    // Top-left at (x,y) pushed the 88×88 cluster down-right; chain centers on jug.
+    balanceHints.style.transform = `translate3d(${input.screenX}px, ${input.screenY}px, 0) translate(-50%, -50%)`;
     if (!lastHintVisible) {
       lastHintVisible = true;
       balanceHints.classList.add('is-visible');

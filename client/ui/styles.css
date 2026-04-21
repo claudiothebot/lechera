@@ -492,8 +492,8 @@ body {
 
 /*
  * Balance hints — four arrow prompts pinned above the jug in screen
- * space. Container is positioned per frame via `transform: translate3d`
- * so `hud.setBalanceHints` only pays a single style mutation per arrow.
+ * space. Container is positioned per frame with `translate3d` + `translate(-50%,-50%)`
+ * so the cluster center matches the projected jug anchor.
  * Arrows are CSS triangles (no glyph fallbacks); each axis has one
  * directional hint (forward/backward OR left/right, never both on the
  * same axis).

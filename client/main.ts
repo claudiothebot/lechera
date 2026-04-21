@@ -28,6 +28,7 @@ import {
   type JugSource,
 } from './game/jugModel';
 import { loadLevelAnimals, type LevelAnimals } from './game/levelAnimals';
+import { createHorizonBackdrop } from './game/horizonBackdrop';
 import { loadBillboardModel } from './game/billboardModel';
 import {
   buildBillboardCollisionObstacles,
@@ -129,16 +130,51 @@ function triangularLitresFor(index: number): number {
  */
 const YAW_INERTIA_GAIN = 15.0;
 
+/**
+ * Braking inertia attenuation. When the player's linear acceleration is
+ * pointing AGAINST the current velocity (i.e. they're slowing down, either
+ * by releasing W or actively pressing S), the jug's inertia tug is scaled
+ * down by this factor. Rationale: stopping intuitively feels like it
+ * should steady the jug, not fling it forward. At 1.0 the system behaves
+ * like pure physics; lower values reward "just stop to recover". Only the
+ * component of accel that opposes velocity is attenuated — any remaining
+ * lateral push is untouched so turns still slosh normally.
+ */
+const BRAKE_INERTIA_FACTOR = 0.3;
+/** Below this speed the braking heuristic stops applying (avoid jitter). */
+const BRAKE_MIN_SPEED = 0.25;
+
+/**
+ * Startup inertia attenuation. The physics hit the jug hardest in the
+ * first frames of motion (9 m/s² accel pulse from a standing start), and
+ * `BRAKE_INERTIA_FACTOR` by design only kicks in once the character is
+ * already moving. This mirrors it for the opposite regime: scale down the
+ * linear inertia contribution while `speed` is still low, fading back to
+ * full physics as the character reaches cruising speed. Does NOT touch
+ * the character's actual acceleration (controls stay responsive) — it
+ * only softens what the jug "feels".
+ */
+const STARTUP_INERTIA_MIN = 0.4;
+/** Speed (m/s) at which startup attenuation fades back to full strength. */
+const STARTUP_SPEED = 2.0;
+
 async function boot() {
   const canvas = document.querySelector<HTMLCanvasElement>('#game');
   if (!canvas) throw new Error('Canvas #game not found');
 
   const params = new URLSearchParams(window.location.search);
+  const perfMode = params.get('perf') === '1';
   if (params.get('editor') === '1') {
     const { bootLevelEditor } = await import('./editor/levelEditor');
     await bootLevelEditor(canvas);
     return;
   }
+  const minimapEnabled = !perfMode && params.get('minimap') !== '0';
+  const shadowsEnabled = !perfMode && params.get('shadows') !== '0';
+  const hdriEnabled = !perfMode && params.get('hdri') !== '0';
+  const dreamPreviewEnabled = !perfMode && params.get('dreamPreview') !== '0';
+  const balanceHintsEnabled = !perfMode && params.get('hints') !== '0';
+  const decorEnabled = !perfMode && params.get('decor') !== '0';
 
   const { renderer, scene, camera } = createBootstrap(canvas);
   const resize = createResize(renderer, camera);
@@ -158,18 +194,20 @@ async function boot() {
   // add fragment cost without meaningfully improving the daydream look.
   const sun = new THREE.DirectionalLight(0xfff0d6, 1.1);
   sun.position.set(20, 35, 15);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(768, 768);
-  sun.shadow.camera.left = -22;
-  sun.shadow.camera.right = 22;
-  sun.shadow.camera.top = 22;
-  sun.shadow.camera.bottom = -22;
-  sun.shadow.camera.near = 1;
-  sun.shadow.camera.far = 80;
+  sun.castShadow = shadowsEnabled;
+  if (shadowsEnabled) {
+    sun.shadow.mapSize.set(768, 768);
+    sun.shadow.camera.left = -22;
+    sun.shadow.camera.right = 22;
+    sun.shadow.camera.top = 22;
+    sun.shadow.camera.bottom = -22;
+    sun.shadow.camera.near = 1;
+    sun.shadow.camera.far = 80;
+  }
   // Slight bias bump compensates for the lower map resolution avoiding acne
   // on large receivers (ground plane).
   sun.shadow.bias = -0.0005;
-  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.enabled = shadowsEnabled;
   renderer.shadowMap.type = THREE.PCFShadowMap;
   scene.add(sun);
   // DirectionalLight aims from position toward target.position. We'll drive
@@ -205,29 +243,53 @@ async function boot() {
     console.error('[level] failed to load house obstacles', err);
   });
 
-  installHdriSky(
-    renderer,
-    scene,
-    // ambientCG "Day Sky HDRI 001 B": stitched panorama with horizon
-    // clearing — a clean, slightly hazy blue daytime sky with soft cumulus
-    // clouds. EXR (OpenEXR) format; sky.ts auto-detects the loader by
-    // extension. Replaces Kloppenheim_06 which had a strong directional
-    // bright/dark split that read as inconsistent depending on yaw.
-    '/hdri/daysky_001b_2k.exr',
-    {
-      // Sky at full brightness; IBL kept moderate so the panorama doesn't
-      // over-light the milkmaid / props. Tune if shading looks blown out.
-      backgroundIntensity: 1.0,
-      environmentIntensity: 0.5,
-      // Most ambientCG sky panoramas are roughly omnidirectional (the
-      // technique notes "horizon clearing"), so no yaw is needed to find a
-      // "pretty side". Adjust if a particular cloud arrangement reads
-      // better in front of the camera.
-      yawRotation: 0,
-    },
-  ).catch((err) => {
-    console.error('[sky] failed to load HDRI', err);
-  });
+  // Horizon backdrop: one cylindrical mesh with a procedurally-generated
+  // forest silhouette around the playable area. Cheapest way to fill the
+  // empty band between props and sky.
+  //
+  // Radius 110 m sits in the flat guard band between the world boundary
+  // (55 m) and the mountain ridge (starts rising at 125 m, peaks at ~340 m),
+  // so the backdrop reads as a close forest line with the mountain relief
+  // visible behind it. Partly fogged by the scene fog (near = 85), giving
+  // atmospheric haze without washing out the silhouette.
+  if (decorEnabled) {
+    const boundary = level.definition.worldBoundary;
+    const backdrop = createHorizonBackdrop({
+      radius: 110,
+      height: 22,
+      bottomY: -1,
+      centerX: boundary.centerX,
+      centerZ: boundary.centerZ,
+      tileRepeatU: 6,
+    });
+    scene.add(backdrop);
+  }
+
+  if (hdriEnabled) {
+    installHdriSky(
+      renderer,
+      scene,
+      // ambientCG "Day Sky HDRI 001 B": stitched panorama with horizon
+      // clearing — a clean, slightly hazy blue daytime sky with soft cumulus
+      // clouds. EXR (OpenEXR) format; sky.ts auto-detects the loader by
+      // extension. Replaces Kloppenheim_06 which had a strong directional
+      // bright/dark split that read as inconsistent depending on yaw.
+      '/hdri/daysky_001b_2k.exr',
+      {
+        // Sky at full brightness; IBL kept moderate so the panorama doesn't
+        // over-light the milkmaid / props. Tune if shading looks blown out.
+        backgroundIntensity: 1.0,
+        environmentIntensity: 0.5,
+        // Most ambientCG sky panoramas are roughly omnidirectional (the
+        // technique notes "horizon clearing"), so no yaw is needed to find a
+        // "pretty side". Adjust if a particular cloud arrangement reads
+        // better in front of the camera.
+        yawRotation: 0,
+      },
+    ).catch((err) => {
+      console.error('[sky] failed to load HDRI', err);
+    });
+  }
 
   const player = createPlayer(scene, level.spawn);
   const cameraRig = createCameraRig(camera);
@@ -235,15 +297,34 @@ async function boot() {
   const input = createInputSystem(canvas);
   const hud = createHud();
   hud.setDebugInvincible(DEBUG_INVINCIBLE);
-  const minimapCanvas = document.querySelector<HTMLCanvasElement>('#minimap');
-  if (!minimapCanvas) throw new Error('Canvas #minimap not found');
-  const minimap = createMinimap(minimapCanvas);
+  const minimapWrap = document.querySelector<HTMLElement>('#minimap-wrap');
+  if (!minimapWrap) throw new Error('#minimap-wrap not found');
+  let minimap: ReturnType<typeof createMinimap> | null = null;
+  if (minimapEnabled) {
+    const minimapCanvas = document.querySelector<HTMLCanvasElement>('#minimap');
+    if (!minimapCanvas) throw new Error('Canvas #minimap not found');
+    minimap = createMinimap(minimapCanvas);
+  } else {
+    minimapWrap.style.display = 'none';
+  }
 
+  const dreamPreviewWrap = document.querySelector<HTMLElement>('#hud-dream-wrap');
+  if (!dreamPreviewWrap) throw new Error('#hud-dream-wrap not found');
+  const balanceHintsEl = document.querySelector<HTMLElement>('#balance-hints');
+  if (!balanceHintsEl) throw new Error('#balance-hints not found');
+  if (!balanceHintsEnabled) {
+    balanceHintsEl.style.display = 'none';
+  }
   const dreamPreviewCanvas = document.querySelector<HTMLCanvasElement>(
     '#dream-preview-canvas',
   );
   if (!dreamPreviewCanvas) throw new Error('Canvas #dream-preview-canvas not found');
-  const dreamPreview = createDreamPreview(dreamPreviewCanvas);
+  let dreamPreview: ReturnType<typeof createDreamPreview> | null = null;
+  if (dreamPreviewEnabled) {
+    dreamPreview = createDreamPreview(dreamPreviewCanvas);
+  } else {
+    dreamPreviewWrap.style.display = 'none';
+  }
   const progression = createProgression();
 
   const loadingEl = document.getElementById('loading-screen');
@@ -308,40 +389,42 @@ async function boot() {
   // and billboard layout samples the level definition + current obstacle
   // set to reject overlaps. Scenery props (hay, cart, well) are decorative
   // only. Non-blocking — gameplay starts on bare grass.
-  (async () => {
-    try {
-      await loadLevelTrees(level, DREAM_GOALS);
-    } catch (err) {
-      console.error('[trees] failed to scatter trees', err);
-    }
+  if (decorEnabled) {
+    (async () => {
+      try {
+        await loadLevelTrees(level, DREAM_GOALS);
+      } catch (err) {
+        console.error('[trees] failed to scatter trees', err);
+      }
 
-    try {
-      await loadLevelSceneryProps(level);
-    } catch (err) {
-      console.error('[scenery] failed to load props', err);
-    }
+      try {
+        await loadLevelSceneryProps(level);
+      } catch (err) {
+        console.error('[scenery] failed to load props', err);
+      }
 
-    try {
-      const billboardModel = await loadBillboardModel();
-      const placements = buildBillboardPlacements(
-        level.definition,
-        level.obstacles,
-        DREAM_GOALS,
-        EXAMPLE_TWEETS,
-        { x: level.spawn.x, z: level.spawn.z },
-      );
-      level.addObstacles(buildBillboardCollisionObstacles(billboardModel, placements));
-      createTweetBillboards({
-        scene,
-        camera,
-        renderer,
-        billboard: billboardModel,
-        placements,
-      });
-    } catch (err) {
-      console.error('[billboards] failed to load billboard model', err);
-    }
-  })();
+      try {
+        const billboardModel = await loadBillboardModel();
+        const placements = buildBillboardPlacements(
+          level.definition,
+          level.obstacles,
+          DREAM_GOALS,
+          EXAMPLE_TWEETS,
+          { x: level.spawn.x, z: level.spawn.z },
+        );
+        level.addObstacles(buildBillboardCollisionObstacles(billboardModel, placements));
+        createTweetBillboards({
+          scene,
+          camera,
+          renderer,
+          billboard: billboardModel,
+          placements,
+        });
+      } catch (err) {
+        console.error('[billboards] failed to load billboard model', err);
+      }
+    })();
+  }
 
   const tiltAxis = new THREE.Vector3();
   const jugWorldPos = new THREE.Vector3();
@@ -456,7 +539,7 @@ async function boot() {
 
     hud.setMilkStats(d.litres, currentLitresDelivered());
     hud.setDreamLabel(d.dreamName);
-    dreamPreview.setKey(d.animalKey, levelAnimals);
+    dreamPreview?.setKey(d.animalKey, levelAnimals);
   }
 
   /**
@@ -903,6 +986,40 @@ async function boot() {
       let camAccelForward = r.worldAccelX * sn + r.worldAccelZ * -cs;
       let camAccelRight = r.worldAccelX * cs + r.worldAccelZ * sn;
 
+      const camVelForward = r.worldVelX * sn + r.worldVelZ * -cs;
+      const camVelRight = r.worldVelX * cs + r.worldVelZ * sn;
+      const speedSq = camVelForward * camVelForward + camVelRight * camVelRight;
+
+      // Startup attenuation: near zero speed the first frames of motion
+      // carry the whole ACCEL pulse. Scale linear inertia down until the
+      // character has built up some speed, then fade to full physics.
+      // Interpolates STARTUP_INERTIA_MIN (at rest) → 1 (at STARTUP_SPEED).
+      const speed = Math.sqrt(speedSq);
+      const startupT = Math.min(1, speed / STARTUP_SPEED);
+      const startupFactor =
+        STARTUP_INERTIA_MIN + (1 - STARTUP_INERTIA_MIN) * startupT;
+      camAccelForward *= startupFactor;
+      camAccelRight *= startupFactor;
+
+      // Braking attenuation: the subset of `camAccel` that opposes the
+      // current velocity is "deceleration" — the player is bleeding speed.
+      // We scale ONLY that opposing component so accelerating from rest and
+      // turning still punch the jug at full strength, but releasing W (or
+      // holding S) doesn't slosh anywhere near as hard as pushing off did.
+      if (speedSq > BRAKE_MIN_SPEED * BRAKE_MIN_SPEED) {
+        // Project accel onto velocity direction; the projection is negative
+        // when the two vectors point opposite ways (i.e. braking).
+        const projAlongVel =
+          (camAccelForward * camVelForward + camAccelRight * camVelRight) /
+          speedSq;
+        if (projAlongVel < 0) {
+          // Attenuation amount (the "missing" fraction we want to remove).
+          const k = (1 - BRAKE_INERTIA_FACTOR) * projAlongVel;
+          camAccelForward -= k * camVelForward;
+          camAccelRight -= k * camVelRight;
+        }
+      }
+
       // Yaw-induced inertia: the jug lags behind the character's rotation.
       // Direction: opposite to the character's local "right" vector (so a
       // right-turn pushes the jug to the character's left), magnitude
@@ -972,7 +1089,7 @@ async function boot() {
       // jug into CSS pixel space; hide when the cluster would fall off-
       // screen or sit behind the camera (project returns z outside [-1, 1]
       // in that case).
-      if (status === 'playing' && !balance.isSpilled) {
+      if (balanceHintsEnabled && status === 'playing' && !balance.isSpilled) {
         hintProjectionVec.copy(jugWorldPos);
         hintProjectionVec.y += HINT_ABOVE_JUG_M;
         hintProjectionVec.project(camera);
@@ -1085,9 +1202,11 @@ async function boot() {
     // the shadow stale by a frame at the edges.
     const px = player.group.position.x;
     const pz = player.group.position.z;
-    sun.position.set(px + SUN_OFFSET.x, SUN_OFFSET.y, pz + SUN_OFFSET.z);
-    sun.target.position.set(px, 0, pz);
-    sun.target.updateMatrixWorld(true);
+    if (shadowsEnabled) {
+      sun.position.set(px + SUN_OFFSET.x, SUN_OFFSET.y, pz + SUN_OFFSET.z);
+      sun.target.position.set(px, 0, pz);
+      sun.target.updateMatrixWorld(true);
+    }
 
     // Multiplayer: ship our pose (rate-limited to 20 Hz internally),
     // then advance remote-player interpolation so their visuals catch
@@ -1101,7 +1220,7 @@ async function boot() {
 
     // Minimap reflects whatever state we ended this frame in (playing or
     // frozen), so the radar is still informative on game-over screens.
-    minimap.render({
+    minimap?.render({
       playerX: player.group.position.x,
       playerZ: player.group.position.z,
       facing: player.result.facing,
@@ -1112,7 +1231,7 @@ async function boot() {
     });
 
     renderer.render(scene, camera);
-    dreamPreview.render(dt);
+    dreamPreview?.render(dt);
   });
 }
 

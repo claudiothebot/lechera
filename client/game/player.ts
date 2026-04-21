@@ -44,6 +44,14 @@ export interface PlayerUpdateResult {
   /** World-space horizontal acceleration this frame (m/s^2). */
   worldAccelX: number;
   worldAccelZ: number;
+  /**
+   * World-space horizontal velocity (m/s). Exposed so consumers (the
+   * balance system in main.ts) can tell whether the current acceleration
+   * is pushing the character forward or BRAKING it — the jug should
+   * slosh a lot less when the player is deliberately slowing down.
+   */
+  worldVelX: number;
+  worldVelZ: number;
   bumps: readonly BumpEvent[];
   speed: number;
   /** Current character facing (rad, world yaw around +Y). */
@@ -139,6 +147,8 @@ export function createPlayer(scene: THREE.Scene, spawn: THREE.Vector3): Player {
     position: group.position,
     worldAccelX: 0,
     worldAccelZ: 0,
+    worldVelX: 0,
+    worldVelZ: 0,
     bumps,
     speed: 0,
     facing,
@@ -156,6 +166,8 @@ export function createPlayer(scene: THREE.Scene, spawn: THREE.Vector3): Player {
     jugAnchor.quaternion.identity();
     result.worldAccelX = 0;
     result.worldAccelZ = 0;
+    result.worldVelX = 0;
+    result.worldVelZ = 0;
     result.speed = 0;
     // Clear in-place so `result.bumps` keeps pointing at the same buffer
     // shared with the module-local `bumps` scratch array.
@@ -285,6 +297,8 @@ export function createPlayer(scene: THREE.Scene, spawn: THREE.Vector3): Player {
     const dtSafe = Math.max(dt, 1e-4);
     result.worldAccelX = (velocity.x - prevVelocity.x) / dtSafe;
     result.worldAccelZ = (velocity.z - prevVelocity.z) / dtSafe;
+    result.worldVelX = velocity.x;
+    result.worldVelZ = velocity.z;
     result.speed = speed;
     // `result.bumps` aliases the module-local `bumps` array; no reassignment
     // needed — callers read what we've pushed above.

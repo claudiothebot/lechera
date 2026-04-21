@@ -23,12 +23,13 @@ export function createBootstrap(canvas: HTMLCanvasElement): Bootstrap {
   // Daylight-ish placeholder (matches the mean tone of our HDRI) so the sky
   // still reads well during the brief window before installHdriSky resolves.
   scene.background = new THREE.Color(0xa7c3d9);
-  // No fog: the ground plane (`GROUND_SIZE` in `level.ts`) extends well past
-  // the camera's far plane so its edge is never visible, and any fog tint
-  // mismatched with the HDRI horizon reads as a bright haze band rather
-  // than atmospheric depth. Without fog the distant grass simply meets the
-  // sky at the geometric horizon, which is how real flat terrain looks.
-  scene.fog = null;
+  // Linear fog chosen to tint distant geometry without touching the playable
+  // area. `near` sits safely past the world-boundary radius (~55 m) so the
+  // village and props read at full contrast; `far` matches the ring where
+  // the horizon backdrop lives so the backdrop fades into the sky instead of
+  // cutting hard against it. Colour = mean tone of the HDRI horizon so the
+  // haze doesn't look tinted.
+  scene.fog = new THREE.Fog(0xbfd8ef, 85, 220);
 
   const camera = new THREE.PerspectiveCamera(
     60,

@@ -708,32 +708,52 @@ export async function loadLevelTrees(
   // effectively walking through the trunk. Scales with the world-scale
   // applied to scattered trees so variants stay in proportion.
   const trunkR = 0.16 * TREE_SCATTER_WORLD_SCALE;
+  // Chunk the forest so frustum culling can reject whole patches. One giant
+  // InstancedMesh per variant keeps draw calls low, but it also means the
+  // renderer ends up touching essentially every tree every frame because the
+  // batch bounds span the full meadow. A ~24 m cell is still coarse enough to
+  // keep the number of batches modest while small enough that off-camera
+  // horizon rings get culled reliably.
+  const TREE_INSTANCE_CHUNK_M = 24;
 
-  // Bucket placements by variant so each variant can be drawn via a single
-  // InstancedMesh group (one draw call per leaf mesh, not per tree).
-  const placementsByVariant = new Map<TreeVariantKind, InstancedTreePlacement[]>();
+  // Bucket placements by variant + world cell so each batch stays local.
+  // That restores meaningful frustum culling without falling all the way back
+  // to one Object3D per tree.
+  const placementsByChunk = new Map<
+    string,
+    {
+      variant: TreeVariantKind;
+      placements: InstancedTreePlacement[];
+    }
+  >();
   for (const p of placements) {
     if (!models.has(p.variant)) continue;
-    let bucket = placementsByVariant.get(p.variant);
+    const cellX = Math.floor(p.x / TREE_INSTANCE_CHUNK_M);
+    const cellZ = Math.floor(p.z / TREE_INSTANCE_CHUNK_M);
+    const key = `${p.variant}:${cellX}:${cellZ}`;
+    let bucket = placementsByChunk.get(key);
     if (!bucket) {
-      bucket = [];
-      placementsByVariant.set(p.variant, bucket);
+      bucket = {
+        variant: p.variant,
+        placements: [],
+      };
+      placementsByChunk.set(key, bucket);
     }
-    bucket.push({ x: p.x, z: p.z, yaw: p.yaw });
+    bucket.placements.push({ x: p.x, z: p.z, yaw: p.yaw });
   }
 
   const newObstacles: Obstacle[] = [];
-  for (const [variant, variantPlacements] of placementsByVariant) {
+  for (const { variant, placements: chunkPlacements } of placementsByChunk.values()) {
     const model = models.get(variant);
     if (!model) continue;
-    const instancedGroup = model.createInstancedMeshes(variantPlacements);
+    const instancedGroup = model.createInstancedMeshes(chunkPlacements);
     level.group.add(instancedGroup);
 
     // Collision still uses one AABB per tree; the `visual` reference is
-    // shared across all trees of this variant (the obstacle system only uses
-    // `visual` to swap placeholder boxes when a house GLB resolves, which
-    // trees never do, so sharing is safe).
-    for (const p of variantPlacements) {
+    // shared across the chunk (the obstacle system only uses `visual` to swap
+    // placeholder boxes when a house GLB resolves, which trees never do, so
+    // sharing is safe).
+    for (const p of chunkPlacements) {
       newObstacles.push({
         center: new THREE.Vector3(p.x, model.halfY, p.z),
         halfX: trunkR,

@@ -143,10 +143,6 @@ export async function loadTreeModel(
         const im = new THREE.InstancedMesh(leaf.geometry, leaf.material, placements.length);
         im.castShadow = castShadow;
         im.receiveShadow = true;
-        // The InstancedMesh's geometry bbox describes a single tree only, so
-        // CPU frustum culling would drop the whole cluster whenever the first
-        // instance sits off-screen. Rely on GPU rasterization culling instead.
-        im.frustumCulled = false;
 
         for (let i = 0; i < placements.length; i++) {
           const p = placements[i]!;
@@ -156,6 +152,12 @@ export async function loadTreeModel(
           im.setMatrixAt(i, tmp);
         }
         im.instanceMatrix.needsUpdate = true;
+        // Keep the batch CPU-cullable. `loadLevelTrees` now chunks the forest
+        // spatially, so each InstancedMesh covers a local patch instead of the
+        // whole map; updating the aggregate bounds lets Three skip chunks that
+        // sit fully outside the camera frustum.
+        im.computeBoundingBox();
+        im.computeBoundingSphere();
         group.add(im);
       }
 
