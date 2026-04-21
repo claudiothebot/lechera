@@ -56,16 +56,14 @@ export interface DreamConfig {
   readonly goal: THREE.Vector3;
   /** Uniform scale applied to the jug visual. */
   readonly jugScale: number;
-  /** Stability multiplier (lower = wobblier / "heavier" jug). */
-  readonly stabilityScale: number;
-  /** Inertia multiplier for `jugBalance` (higher = swings more on accel). */
-  readonly inertiaScale: number;
-  /** Damping multiplier for `jugBalance` (lower = harder to settle). */
-  readonly dampingScale: number;
-  /** Spill threshold multiplier (lower = tips sooner). */
-  readonly spillThresholdScale: number;
-  /** Player-correction multiplier (lower = arrow keys fix less). */
-  readonly correctionScale: number;
+  /**
+   * 0 = easy baseline, 1 = hardest tuned feel. `jugBalance.setConfig`
+   * derives stability / inertia / damping / spill / correction from this
+   * single number — edit `DREAM_DIFFICULTY_PEAK_INDEX` below to change how
+   * fast the game ramps up, and the lerps inside `jugBalance.ts` to change
+   * how the hardest state actually feels.
+   */
+  readonly difficulty: number;
   /** Key of the reward animal to display on the goal spot. */
   readonly animalKey: AnimalKey;
 }
@@ -115,35 +113,12 @@ export function createProgression(): Progression {
 }
 
 /**
- * Build the config for a given 0-based delivery index.
- *
- * Tuning choices (all multipliers of 1.0 at n=0):
- *  - jug scale   +12 %/n, cap 2.2× (visual only, never crushes the Lechera)
- *  - stability   −18 %/n, floor 0.25× — main "feel" lever: a low-stability
- *                jug keeps swaying even without player motion and makes
- *                every correction lag behind
- *  - inertia     +50 %/n, cap 4.0×  — every WASD input shoves the jug
- *                much further in late dreams; combined with the higher
- *                base `INERTIA_GAIN`, this reads as "the jug has its
- *                own momentum and I'm just a host"
- *  - damping     −15 %/n, floor 0.30× — oscillations barely decay in
- *                late dreams; the jug keeps sloshing after every move
- *  - spill       −10 %/n, floor 0.45× — less tolerance before tipping
- *  - correction  −20 %/n, floor 0.15× — arrow keys fix less at higher
- *                levels, so the player has to ANTICIPATE sway rather
- *                than react to it. This is what actually makes the
- *                endgame require skill instead of button-mashing.
- *
- * The curve is deliberately steep:
- *   Eggs (n=0):   baseline — noticeable sway but easy to correct
- *   Hens (n=1):   ~50 % more inertia, 20 % less correction
- *   Pig (n=2):    inertia 2×, correction down to 60 %
- *   Calf (n=3):   jug feels loose, every turn is a liability
- *   Cow (n=4):    another game entirely — you plan the route first
- *   Endless (n≥5):  floors kick in, but n=5 is already near-bottom on
- *                   most scales, so endless stays brutal without
- *                   becoming "impossible with extra steps"
+ * Dream index at which `difficulty` reaches 1.0 (the hardest tuned feel).
+ * Anything past this index stays clamped at 1.0. Lower values = steeper
+ * ramp; higher values = gentler ramp. The actual physics of easy vs hard
+ * live in `client/game/jugBalance.ts` (`scalesForDifficulty`).
  */
+const DREAM_DIFFICULTY_PEAK_INDEX = 4;
 
 /**
  * Uniform jug visual scale for a 0-based dream index. Matches
@@ -168,11 +143,7 @@ function makeDream(index: number): DreamConfig {
 
   const n = index;
   const jugScale = jugScaleForDreamIndex(n);
-  const stabilityScale = Math.max(1.0 - 0.18 * n, 0.25);
-  const inertiaScale = Math.min(1.0 + 0.5 * n, 4.0);
-  const dampingScale = Math.max(1.0 - 0.15 * n, 0.3);
-  const spillThresholdScale = Math.max(1.0 - 0.1 * n, 0.45);
-  const correctionScale = Math.max(1.0 - 0.2 * n, 0.15);
+  const difficulty = Math.min(1, n / DREAM_DIFFICULTY_PEAK_INDEX);
 
   return {
     index,
@@ -181,11 +152,7 @@ function makeDream(index: number): DreamConfig {
     isEndless,
     goal,
     jugScale,
-    stabilityScale,
-    inertiaScale,
-    dampingScale,
-    spillThresholdScale,
-    correctionScale,
+    difficulty,
     animalKey,
   };
 }

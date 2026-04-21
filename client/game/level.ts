@@ -123,9 +123,17 @@ function tupleWaypoints(path: LevelPathDefinition): ReadonlyArray<readonly [numb
 }
 
 /**
- * Terrain-relief experiment on a large decorative ground plane. The playable
- * area stays exactly the same; only the OUTER edge of the big world lifts so
- * the far horizon reads as distant hills instead of a hard flat cutoff.
+ * Terrain relief on the decorative ground plane. The playable area stays flat;
+ * we raise a continuous *ring* of hills around it so the horizon reads as a
+ * distant sierra in every direction instead of four isolated mounds at the
+ * cardinal points.
+ *
+ * The shape is the product of three fields:
+ *   - a radial profile (flat inside the play area, rising to a ridge, tapering
+ *     before the ground edge),
+ *   - an angular pattern (low-frequency peaks/valleys around the circle so it
+ *     doesn't look like a doughnut),
+ *   - high-frequency fbm noise for silhouette detail.
  *
  * PlaneGeometry lives in local XY before we rotate it onto the XZ ground:
  *   - local x -> world x
@@ -140,6 +148,53 @@ function smoothstep(edge0: number, edge1: number, value: number): number {
   return t * t * (3 - 2 * t);
 }
 
+function fract(value: number): number {
+  return value - Math.floor(value);
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+function hashNoise2D(x: number, z: number): number {
+  const seed = Math.sin(x * 127.1 + z * 311.7) * 43758.5453123;
+  return fract(seed);
+}
+
+function valueNoise2D(x: number, z: number): number {
+  const x0 = Math.floor(x);
+  const z0 = Math.floor(z);
+  const tx = fract(x);
+  const tz = fract(z);
+  const sx = tx * tx * (3 - 2 * tx);
+  const sz = tz * tz * (3 - 2 * tz);
+
+  const n00 = hashNoise2D(x0, z0);
+  const n10 = hashNoise2D(x0 + 1, z0);
+  const n01 = hashNoise2D(x0, z0 + 1);
+  const n11 = hashNoise2D(x0 + 1, z0 + 1);
+
+  const nx0 = lerp(n00, n10, sx);
+  const nx1 = lerp(n01, n11, sx);
+  return lerp(nx0, nx1, sz) * 2 - 1;
+}
+
+function fbmNoise2D(x: number, z: number, octaves: number): number {
+  let amplitude = 1;
+  let frequency = 1;
+  let total = 0;
+  let weight = 0;
+
+  for (let i = 0; i < octaves; i++) {
+    total += valueNoise2D(x * frequency, z * frequency) * amplitude;
+    weight += amplitude;
+    amplitude *= 0.5;
+    frequency *= 2;
+  }
+
+  return weight > 0 ? total / weight : 0;
+}
+
 function sculptGroundReliefAroundPlaySpace(
   geometry: THREE.PlaneGeometry,
   groundSize: number,
@@ -150,36 +205,77 @@ function sculptGroundReliefAroundPlaySpace(
   const pos = geometry.attributes.position as THREE.BufferAttribute | undefined;
   if (!pos) return;
   const half = groundSize * 0.5;
-  const edgeSpan = 220;
+
+  // Radial profile. The play area is flat; beyond a guard band the ground
+  // rises into a ridge and tapers back down before the geometric border so
+  // the mountain silhouette never clips against the skybox edge.
+  const flatGuardStart = playableRadius + 70;
+  const ridgePeakRadius = Math.min(playableRadius + 285, half - 120);
+  const ridgeFadeRadius = Math.min(half - 50, ridgePeakRadius + 140);
+
+  // Height budget (metres above the flat meadow).
+  const baseRidgeHeight = 18;
+  const peakAmp = 14; // low-frequency peaks/valleys around the ring
+  const detailAmp = 6; // high-frequency ridge noise on top
+  const valleyDepth = 9; // how far the gaps between peaks dip
+
+  // Around the horizon we want roughly 8–12 major peaks. Using a
+  // cos(freq * theta) modulated by another sine creates an uneven, natural
+  // cadence instead of a perfectly periodic wave.
+  const angularPeakFreq = 10;
+  const angularWobbleFreq = 3;
 
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
     const z = -pos.getY(i);
     const dx = x - playableCenterX;
     const dz = z - playableCenterZ;
+    const dist = Math.hypot(dx, dz);
 
-    const nx = Math.abs(x) / half;
-    const nz = Math.abs(z) / half;
-    // Rounded-square distance to the outer map limit. Using a superellipse
-    // instead of `max(abs(x), abs(z))` removes the hard corner seam that was
-    // appearing where two square-edge ramps met.
-    const edgeNorm = Math.pow(Math.pow(nx, 4) + Math.pow(nz, 4), 0.25);
-    const edgeDist = half * (1 - edgeNorm);
-    const edgeT = 1 - smoothstep(0, edgeSpan, Math.max(0, edgeDist));
+    if (dist <= flatGuardStart || dist >= ridgeFadeRadius) {
+      pos.setZ(i, 0);
+      continue;
+    }
+
+    // Radial mask: 0 at the guard, 1 at the ridge peak, back to 0 at fade.
+    const rise = smoothstep(flatGuardStart, ridgePeakRadius, dist);
+    const fall = 1 - smoothstep(ridgePeakRadius, ridgeFadeRadius, dist);
+    const radialMask = rise * fall;
+    if (radialMask <= 0) {
+      pos.setZ(i, 0);
+      continue;
+    }
 
     const theta = Math.atan2(dz, dx);
-    const ringWave =
-      0.8 +
-      0.12 * Math.sin(theta * 2.0 + 0.35) +
-      0.08 * Math.sin(theta * 5.0 - 0.9) +
-      0.05 * Math.sin((dx / half) * Math.PI * 1.35 + (dz / half) * Math.PI * 1.1);
-    const ringStrength = Math.max(0.34, ringWave);
-    const ringRise =
-      edgeT *
-      edgeT *
-      (24 + 34 * ringStrength);
 
-    pos.setZ(i, ringRise);
+    // Main ring cadence: ~10 peaks modulated by a slower wobble so they are
+    // not evenly spaced. Mapped into [0,1] so it reads as a height factor.
+    const peakWave =
+      Math.cos(theta * angularPeakFreq + Math.sin(theta * angularWobbleFreq) * 0.9) * 0.5 + 0.5;
+
+    // Periodic angular noise: sampling fbm on a small circle keeps the
+    // pattern continuous across theta = ±π.
+    const angularSampleRadius = 80;
+    const ax = Math.cos(theta) * angularSampleRadius;
+    const az = Math.sin(theta) * angularSampleRadius;
+    const angularLumps = (fbmNoise2D(ax * 0.035, az * 0.035, 3) + 1) * 0.5;
+
+    // Soft blend of both so no two peaks are exactly the same height.
+    const peakShape = peakWave * 0.7 + angularLumps * 0.3;
+
+    // Sharper crests from high-frequency ridge noise on world coords, so
+    // the detail does not "rotate" with theta and looks like real terrain.
+    const ridgeField = 1 - Math.abs(fbmNoise2D((x + 123.4) * 0.018, (z - 67.8) * 0.022, 4));
+    const ridgeDetail = ridgeField * ridgeField;
+
+    // Pull the valleys between major peaks a little lower than the base ridge.
+    const valley = Math.max(0, 0.38 - peakShape) * valleyDepth;
+
+    const height =
+      radialMask *
+      (baseRidgeHeight + peakAmp * peakShape + detailAmp * ridgeDetail - valley);
+
+    pos.setZ(i, Math.max(0, height));
   }
 
   pos.needsUpdate = true;

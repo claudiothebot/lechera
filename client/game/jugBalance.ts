@@ -13,51 +13,68 @@
  * Dynamics: stable damped pendulum + movement inertia + bumps + input.
  */
 
-/**
- * Restoring force ("gravity pulling the jug back upright"). Lowered from
- * the initial 6.0 because a strong restoring force makes even large
- * tilts snap back in ~0.5s, which reads as "the jug is glued to the
- * head". With 4.0 the natural frequency drops to ~2 rad/s (3s period),
- * so tilts linger long enough for the player to feel them.
- */
+// -----------------------------------------------------------------------
+// Feel constants (edit here to change the overall game feel).
+// -----------------------------------------------------------------------
+
+/** Restoring torque per radian of tilt (rad/s²). */
 const STABILITY = 4.0;
-/**
- * Angular damping. Lower = oscillations last longer after a kick. At the
- * old value (2.5) a single sway decayed in <1s. At 1.5 the jug keeps
- * rocking for 2-3s, turning "walk + stop" into something you have to
- * actually manage.
- */
+/** Angular damping coefficient (higher = settles faster). */
 const ANGULAR_DAMPING = 1.5;
-/**
- * How strongly the character's horizontal acceleration tilts the jug.
- * Tuning history:
- *   0.012 → glued to the head, movement invisible.
- *   0.028 → barely noticeable tilt, easy to correct.
- *   0.070 → visible but damped out in a second.
- *   0.160 → current: sprinting at dream 1 kicks the jug ~25° and it
- *           takes 2-3s to settle. In late dreams (inertiaScale up to
- *           4×) any careless motion spills.
- * This is the single biggest "feel" lever — bump only if the previous
- * values still felt understated.
- */
+/** How strongly character acceleration pushes the jug (rad per m/s²). */
 const INERTIA_GAIN = 0.16;
+/** How strongly a bump kicks the jug (rad per m/s of impulse). */
 const BUMP_GAIN = 0.28;
-/**
- * Player's arrow-key corrective torque (base magnitude). Progressively
- * lowered: 9.0 → 6.5 → 4.5. Even at dream 1 the player has to start
- * counter-swaying ahead of their own movement; they can't just press
- * an arrow at the last second and zero it out. Scaled further per dream
- * via `correctionScale`.
- */
+/** Arrow-key corrective torque while held (rad/s²). */
 const PLAYER_CORRECTION = 4.5;
 
 /**
  * Hard cap on combined tilt magnitude (forward+right in rad) before spill.
- * Was 55° — bumped to ~70° so the jug has to lean visibly farther before
- * failing; `normalizedTilt` divides by this, so the HUD bar also reads
- * "roomier" for the same sway.
+ * `normalizedTilt` divides by this, so the HUD bar scales with the
+ * configured spill limit.
  */
 export const MAX_TILT = (70 * Math.PI) / 180;
+
+// -----------------------------------------------------------------------
+// Difficulty curve.
+//
+// A single `difficulty ∈ [0, 1]` controls how wobbly the jug feels. At 0
+// the jug is the easy baseline; at 1 it is the late-game "another game
+// entirely" state. Everything else (inertia, damping, correction, spill)
+// is derived from this one number via the lerps below — edit the two
+// endpoint values of each lerp to change the overall feel of the game.
+// -----------------------------------------------------------------------
+
+interface InternalScales {
+  /** Restoring force multiplier (<1 = wobblier / "heavier"). */
+  readonly stability: number;
+  /** Inertia multiplier (higher = swings more on accel). */
+  readonly inertia: number;
+  /** Damping multiplier (<1 = oscillations last longer). */
+  readonly damping: number;
+  /** MAX_TILT multiplier (<1 = spills sooner). */
+  readonly spill: number;
+  /** Player-correction multiplier (<1 = arrows fix less). */
+  readonly correction: number;
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+function scalesForDifficulty(difficulty: number): InternalScales {
+  const d = Math.min(1, Math.max(0, difficulty));
+  return {
+    // Easy →  Hard
+    stability: lerp(1.0, 0.6, d),
+    inertia: lerp(1.0, 2.2, d),
+    damping: lerp(1.0, 0.55, d),
+    spill: lerp(1.0, 0.7, d),
+    correction: lerp(1.0, 0.55, d),
+  };
+}
+
+// -----------------------------------------------------------------------
 
 export interface BumpInput {
   /** Bump component along camera forward (positive = pushed forward). */
@@ -84,34 +101,14 @@ export interface JugBalanceInput {
 }
 
 /**
- * Per-level difficulty multipliers. All default to 1.0 and can be updated
- * at runtime via `setConfig` when the progression advances.
- *
- * Tuning notes:
- *  - `stabilityScale` is the strongest perceived lever: it scales the
- *    restoring force that pulls the jug upright, so lowering it makes the
- *    jug feel heavier and "wobbly" even without the player moving.
- *  - `inertiaScale` on its own is drowned out by PLAYER_CORRECTION, so it
- *    needs to combine with reduced stability to actually bite.
- *  - `dampingScale` controls how quickly angular velocity decays; lowering
- *    it keeps oscillations alive longer after a bump.
+ * Runtime config. A single `difficulty` knob scales all the physics
+ * levers together via `scalesForDifficulty` (see above). Pass 0 for the
+ * easy baseline, 1 for the hardest tuned state. Anything outside [0, 1]
+ * is clamped.
  */
 export interface JugBalanceConfig {
-  /** Scales the restoring force toward vertical (<1 = wobblier / heavier). */
-  stabilityScale?: number;
-  /** Scales inertia pushback from movement acceleration. */
-  inertiaScale?: number;
-  /** Scales angular damping (<1 means the jug takes longer to settle). */
-  dampingScale?: number;
-  /** Scales MAX_TILT (<1 means the jug spills sooner). */
-  spillThresholdScale?: number;
-  /**
-   * Scales the player's corrective torque from the arrow keys (<1 means
-   * the jug resists being yanked upright, so the player has to anticipate
-   * the sway instead of reacting to it). Paired with rising `inertiaScale`
-   * this is what makes late-game runs feel like carrying a loose jar.
-   */
-  correctionScale?: number;
+  /** 0 = easy baseline, 1 = late-game. Default 0. */
+  difficulty?: number;
   /**
    * When true, tilt is clamped at the spill threshold instead of failing.
    * For playtesting levels without game-over on spill.
@@ -125,7 +122,7 @@ export interface JugBalance {
   readonly tiltMagnitude: number;
   readonly normalizedTilt: number;
   readonly isSpilled: boolean;
-  /** Currently-effective MAX_TILT (after config scaling). */
+  /** Currently-effective MAX_TILT (after difficulty scaling). */
   readonly maxTilt: number;
   update(dt: number, input: JugBalanceInput): void;
   reset(): void;
@@ -139,15 +136,11 @@ export function createJugBalance(initial: JugBalanceConfig = {}): JugBalance {
   let velRight = 0;
   let spilled = false;
 
-  let stabilityScale = initial.stabilityScale ?? 1;
-  let inertiaScale = initial.inertiaScale ?? 1;
-  let dampingScale = initial.dampingScale ?? 1;
-  let spillThresholdScale = initial.spillThresholdScale ?? 1;
-  let correctionScale = initial.correctionScale ?? 1;
+  let scales = scalesForDifficulty(initial.difficulty ?? 0);
   let invincible = initial.invincible ?? false;
 
   function effectiveMaxTilt() {
-    return MAX_TILT * spillThresholdScale;
+    return MAX_TILT * scales.spill;
   }
 
   return {
@@ -172,37 +165,29 @@ export function createJugBalance(initial: JugBalanceConfig = {}): JugBalance {
     update(dt, inp) {
       if (spilled) return;
 
-      // Restoring force pulls tilt back toward vertical. Scaling this is
-      // the single most noticeable difficulty knob: a jug with 60 % of the
-      // base stability feels visibly "heavier" and keeps swaying even while
-      // the player stands still.
-      const stability = STABILITY * stabilityScale;
+      const stability = STABILITY * scales.stability;
       const restoreF = -stability * tiltForward;
       const restoreR = -stability * tiltRight;
 
-      // Movement inertia: acceleration pushes the jug opposite to motion.
-      const inertiaF = -inp.camAccelForward * INERTIA_GAIN * inertiaScale;
-      const inertiaR = -inp.camAccelRight * INERTIA_GAIN * inertiaScale;
+      const inertiaF = -inp.camAccelForward * INERTIA_GAIN * scales.inertia;
+      const inertiaR = -inp.camAccelRight * INERTIA_GAIN * scales.inertia;
 
-      // Player corrective torque from arrow keys. Scaled per-level so the
-      // player's ability to snap the jug back shrinks as progression
-      // advances (late-game runs reward anticipation, not reaction).
-      const correctF = inp.inputForward * PLAYER_CORRECTION * correctionScale;
-      const correctR = inp.inputRight * PLAYER_CORRECTION * correctionScale;
+      const correctF = inp.inputForward * PLAYER_CORRECTION * scales.correction;
+      const correctR = inp.inputRight * PLAYER_CORRECTION * scales.correction;
 
       velForward += (restoreF + inertiaF + correctF) * dt;
       velRight += (restoreR + inertiaR + correctR) * dt;
 
       // Exponential damping of angular velocity.
-      const damping = Math.exp(-ANGULAR_DAMPING * dampingScale * dt);
+      const damping = Math.exp(-ANGULAR_DAMPING * scales.damping * dt);
       velForward *= damping;
       velRight *= damping;
 
-      // Bumps: injected angular impulses per-axis. Bumps scale with inertia
-      // too: a heavier jug takes a harder slap from the same bump.
+      // Bumps: injected angular impulses per-axis. Bumps scale with
+      // inertia too — a heavier jug takes a harder slap from the same hit.
       for (const b of inp.bumps) {
-        velForward += b.forward * BUMP_GAIN * inertiaScale;
-        velRight += b.right * BUMP_GAIN * inertiaScale;
+        velForward += b.forward * BUMP_GAIN * scales.inertia;
+        velRight += b.right * BUMP_GAIN * scales.inertia;
       }
 
       tiltForward += velForward * dt;
@@ -230,14 +215,9 @@ export function createJugBalance(initial: JugBalanceConfig = {}): JugBalance {
       spilled = false;
     },
     setConfig(config) {
-      if (config.stabilityScale !== undefined)
-        stabilityScale = config.stabilityScale;
-      if (config.inertiaScale !== undefined) inertiaScale = config.inertiaScale;
-      if (config.dampingScale !== undefined) dampingScale = config.dampingScale;
-      if (config.spillThresholdScale !== undefined)
-        spillThresholdScale = config.spillThresholdScale;
-      if (config.correctionScale !== undefined)
-        correctionScale = config.correctionScale;
+      if (config.difficulty !== undefined) {
+        scales = scalesForDifficulty(config.difficulty);
+      }
       if (config.invincible !== undefined) invincible = config.invincible;
     },
   };

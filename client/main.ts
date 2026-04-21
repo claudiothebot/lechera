@@ -81,7 +81,7 @@ const TOTAL_TIME_SECONDS = 180;
  * Playtest: never game-over from spilling (tilt clamps at max instead).
  * Set to `true` while tuning levels or rushing to late dreams.
  */
-const DEBUG_INVINCIBLE = true;
+const DEBUG_INVINCIBLE = false;
 
 function dreamAdvanceToast(obtained: string, nextName: string): string {
   return `You got ${obtained.toLowerCase()}! Now you dream of ${nextName.toLowerCase()}.`;
@@ -405,11 +405,7 @@ async function boot() {
 
     level.setGoalPosition(d.goal);
     balance.setConfig({
-      stabilityScale: d.stabilityScale,
-      inertiaScale: d.inertiaScale,
-      dampingScale: d.dampingScale,
-      spillThresholdScale: d.spillThresholdScale,
-      correctionScale: d.correctionScale,
+      difficulty: d.difficulty,
       invincible: DEBUG_INVINCIBLE,
     });
     // Every delivery also resets the balance: narratively the Lechera puts

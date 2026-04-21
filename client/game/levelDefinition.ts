@@ -102,7 +102,7 @@ export interface LevelDefinition {
 
 export const DEFAULT_LEVEL_DEFINITION: LevelDefinition = {
   version: 1,
-  groundSize: 1200,
+  groundSize: 960,
   pavedPaths: [
     {
       width: 1.5,
