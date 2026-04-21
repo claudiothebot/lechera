@@ -48,6 +48,11 @@ export interface RenderTweetOptions {
   foreground?: string;
   /** Muted label colour (handle, timestamp). */
   muted?: string;
+  /**
+   * Body text for `#hashtags` (letters, digits, underscore). Matches
+   * common social formatting so tags read as tappable on the card.
+   */
+  hashtagColor?: string;
 }
 
 const DEFAULTS: Required<Omit<RenderTweetOptions, 'aspect'>> = {
@@ -55,6 +60,8 @@ const DEFAULTS: Required<Omit<RenderTweetOptions, 'aspect'>> = {
   background: '#15202b',
   foreground: '#f7f9f9',
   muted: '#8b98a5',
+  // Twitter/X link blue on dark cards — good contrast for roadside legibility
+  hashtagColor: '#1d9bf0',
 };
 
 /**
@@ -128,7 +135,14 @@ export function renderTweetToCanvas(
 
   const bodyLines = wrapText(ctx, tweet.body, bodyMaxWidth, maxBodyLines);
   for (let i = 0; i < bodyLines.length; i++) {
-    ctx.fillText(bodyLines[i] as string, bodyX, bodyY + i * bodyLineHeight);
+    drawBodyLineWithHashtags(
+      ctx,
+      bodyLines[i] as string,
+      bodyX,
+      bodyY + i * bodyLineHeight,
+      opts.foreground,
+      opts.hashtagColor,
+    );
   }
 
   // Async layer: avatar + media. We don't await: caller gets a "text-only"
@@ -348,6 +362,44 @@ function wrapText(
   }
 
   return lines;
+}
+
+/** Renders a single wrapped line, colouring `#word` runs like link text. */
+function drawBodyLineWithHashtags(
+  ctx: CanvasRenderingContext2D,
+  line: string,
+  x: number,
+  y: number,
+  foreground: string,
+  hashtagColor: string,
+): void {
+  if (!line) return;
+  const re = /(#[A-Za-z0-9_]+)/g;
+  let lastIndex = 0;
+  let cursorX = x;
+  let m: RegExpExecArray | null;
+  let any = false;
+  while ((m = re.exec(line)) !== null) {
+    any = true;
+    if (m.index > lastIndex) {
+      const before = line.slice(lastIndex, m.index);
+      ctx.fillStyle = foreground;
+      ctx.fillText(before, cursorX, y);
+      cursorX += ctx.measureText(before).width;
+    }
+    ctx.fillStyle = hashtagColor;
+    ctx.fillText(m[1]!, cursorX, y);
+    cursorX += ctx.measureText(m[1]!).width;
+    lastIndex = m.index + m[0]!.length;
+  }
+  if (any && lastIndex < line.length) {
+    const rest = line.slice(lastIndex);
+    ctx.fillStyle = foreground;
+    ctx.fillText(rest, cursorX, y);
+  } else if (!any) {
+    ctx.fillStyle = foreground;
+    ctx.fillText(line, x, y);
+  }
 }
 
 function hasMoreContent(full: string, lines: string[]): boolean {
