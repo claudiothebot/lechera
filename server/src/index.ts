@@ -10,12 +10,28 @@ import { Server } from '@colyseus/core';
 import { WebSocketTransport } from '@colyseus/ws-transport';
 import express from 'express';
 import { createServer } from 'node:http';
+import { writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { MilkDreamsRoom } from './rooms/MilkDreamsRoom.js';
 import { getLeaderboardStore } from './persistence/supabase.js';
 
 const PORT = Number(process.env.PORT ?? 2567);
 
 const app = express();
+
+/**
+ * CORS preflight for `POST /dev/level` (level editor save). Express 5's
+ * router uses path-to-regexp v8 — bare `*` in `/dev/*` is invalid ("Missing
+ * parameter name"); we register the concrete path. Add more `app.options`
+ * lines if new `/dev/...` POST routes appear.
+ */
+app.options('/dev/level', (_req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(204);
+});
 
 // Tiny health check for hosting platforms; everything else is WS.
 app.get('/health', (_req, res) => {
@@ -54,6 +70,55 @@ app.get('/leaderboard', async (req, res) => {
     res.json({ entries: [] });
   }
 });
+
+/**
+ * Dev-only endpoint used by the level editor's "Save" button. Writes
+ * the supplied JSON payload straight into `public/levels/level-01.json`
+ * so a reload picks up the new layout for everyone hitting the same
+ * dev server.
+ *
+ * Guard-railed on three axes:
+ *  - `NODE_ENV !== 'production'` — the endpoint flat-out refuses to
+ *    exist in production builds.
+ *  - JSON body is parsed and re-stringified via the LevelDefinition
+ *    shape indirectly (the client sends `serializeLevelDefinition`
+ *    output, which already went through `normalizeLevelDefinition`);
+ *    we just verify that it's syntactically valid JSON before touching
+ *    the filesystem.
+ *  - File path is computed from this file's URL, so it's always the
+ *    repo's `public/levels/level-01.json` regardless of the CWD
+ *    `tsx watch` was started from.
+ */
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const LEVEL_FILE_PATH = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../public/levels/level-01.json',
+);
+
+app.post(
+  '/dev/level',
+  express.json({ limit: '256kb' }),
+  async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    if (IS_PRODUCTION) {
+      res.status(403).json({ error: 'disabled in production' });
+      return;
+    }
+    if (!req.body || typeof req.body !== 'object') {
+      res.status(400).json({ error: 'body must be a JSON object' });
+      return;
+    }
+    try {
+      const pretty = JSON.stringify(req.body, null, 2) + '\n';
+      await writeFile(LEVEL_FILE_PATH, pretty, 'utf8');
+      console.log(`[dev-save] wrote ${LEVEL_FILE_PATH} (${pretty.length} B)`);
+      res.json({ ok: true, path: LEVEL_FILE_PATH, bytes: pretty.length });
+    } catch (err) {
+      console.error('[dev-save] write failed', err);
+      res.status(500).json({ error: (err as Error).message });
+    }
+  },
+);
 
 // Express owns the HTTP layer; Colyseus borrows the same server for WS
 // upgrades. This is the 0.17 pattern that lets us add REST endpoints

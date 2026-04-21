@@ -3,16 +3,33 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 
 /**
- * Village house obstacle — loaded from a Meshy-AI single-mesh GLB,
- * optimized offline (simplify + 1K webp + meshopt) into
- * `/public/models/house-opt.glb`.
- *
- * Because the source is a single mesh with no hierarchy, integration is
- * a straight GLB load + centre + scale to a target footprint. The
- * prepared template is cloned once per obstacle slot; clones share
- * geometry and materials (Three.js `Object3D.clone(true)` keeps mesh
- * refs), so N placements cost ~1 GPU upload.
+ * Village house obstacle — GLB load + centre on XZ + ground at Y=0, then
+ * optional world scale (below) on top of export size.
  */
+/** Uniform scale on authored house size (+50 % vs raw GLB footprint). */
+const HOUSE_WORLD_SCALE = 1.5;
+
+/**
+ * House variant GLB + label catalog. The canonical list of `HouseVariantKind`
+ * ids lives in `levelDefinition.ts` (dependency-free, consumed by the level
+ * JSON + editor). Adding a new variant is a 3-step process:
+ *   1. Drop the optimised GLB in `public/models/house-*-opt.glb`.
+ *   2. Extend `HouseVariantKind` + `HOUSE_VARIANT_KINDS` in `levelDefinition.ts`.
+ *   3. Add a `HOUSE_VARIANT_URLS` / `HOUSE_VARIANT_LABELS` entry below.
+ */
+import type { HouseVariantKind } from './levelDefinition';
+
+export const HOUSE_VARIANT_URLS: Record<HouseVariantKind, string> = {
+  'iberian-village': '/models/house-iberian-village-opt.glb',
+  'rustic-spanish': '/models/house-rustic-spanish-opt.glb',
+  'dairy-shed': '/models/house-dairy-shed-opt.glb',
+};
+
+export const HOUSE_VARIANT_LABELS: Record<HouseVariantKind, string> = {
+  'iberian-village': 'Iberian village',
+  'rustic-spanish': 'Rustic Spanish',
+  'dairy-shed': 'Dairy shed',
+};
 
 export interface HouseModel {
   /**
@@ -26,16 +43,7 @@ export interface HouseModel {
   halfY: number;
 }
 
-/**
- * Target largest-XZ-axis size after scaling, in metres. Big enough that
- * the houses read as real buildings framing the route rather than small
- * prop-sized obstacles.
- */
-const TARGET_FOOTPRINT_M = 7.2;
-
-export async function loadHouseModel(
-  url = '/models/house-opt.glb',
-): Promise<HouseModel> {
+export async function loadHouseModel(url = '/models/house-iberian-village-opt.glb'): Promise<HouseModel> {
   const loader = new GLTFLoader();
   loader.setMeshoptDecoder(MeshoptDecoder);
   const gltf = await loader.loadAsync(url);
@@ -56,26 +64,20 @@ export async function loadHouseModel(
   bbox.getSize(size);
   bbox.getCenter(centre);
 
-  const largestXZ = Math.max(size.x, size.z) || 1;
-  const scale = TARGET_FOOTPRINT_M / largestXZ;
-
-  // Two-level wrap: inner group re-centres the mesh on its footprint
-  // and drops min-Y to 0; outer wrapper applies the uniform scale. This
-  // way a later rotation about the wrapper's Y axis spins around the
-  // footprint centre.
   scene.position.set(-centre.x, -bbox.min.y, -centre.z);
 
   const wrapper = new THREE.Group();
   wrapper.name = 'house';
   wrapper.add(scene);
-  wrapper.scale.setScalar(scale);
+  wrapper.scale.setScalar(HOUSE_WORLD_SCALE);
 
+  const h = HOUSE_WORLD_SCALE;
   return {
     instance() {
       return wrapper.clone(true);
     },
-    halfX: size.x * scale * 0.5,
-    halfZ: size.z * scale * 0.5,
-    halfY: size.y * scale * 0.5,
+    halfX: size.x * 0.5 * h,
+    halfZ: size.z * 0.5 * h,
+    halfY: size.y * 0.5 * h,
   };
 }

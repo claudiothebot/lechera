@@ -6,14 +6,19 @@ import {
   goalFor,
 } from '@milk-dreams/shared';
 import { loadPbrMaterial } from '../render/textures';
-import { loadHouseModel } from './houseModel';
+import { HOUSE_VARIANT_URLS, loadHouseModel } from './houseModel';
+import type { HouseModel } from './houseModel';
 import {
   DEFAULT_LEVEL_DEFINITION,
-  type HouseSlotDefinition,
+  HOUSE_VARIANT_KINDS,
+  resolveHouseVariant,
+  type HouseVariantKind,
   type LevelDefinition,
   type LevelPathDefinition,
 } from './levelDefinition';
-import { loadTreeModel } from './treeModel';
+import { loadTreeModel, TREE_SCATTER_WORLD_SCALE, TREE_VARIANT_URLS } from './treeModel';
+import type { TreeModel } from './treeModel';
+import type { TreeVariantKind } from './levelDefinition';
 
 export interface Level {
   definition: LevelDefinition;
@@ -27,13 +32,10 @@ export interface Level {
   houseObstacles: readonly Obstacle[];
   /** Big horizontal plane (grass). Exposed so we can swap its material async. */
   ground: THREE.Mesh;
-  /** Curved ribbon from spawn → goal (dirt path). */
-  path: PathMesh;
   /**
-   * Optional decorative paving-stone paths branching off the main dirt
-   * path. Purely visual (no collision); we keep the meshes here so
-   * `loadLevelTextures` can swap their placeholder material for the
-   * shared paving-stones PBR set in one place.
+   * Decorative paving-stone ribbons on the grass. Purely visual (no
+   * collision); meshes are kept here so `loadLevelTextures` can swap
+   * placeholders for the shared paving-stones PBR set.
    */
   pavedPaths: readonly PathMesh[];
   /**
@@ -102,9 +104,13 @@ export const WORLD_BOUNDARY_CENTER = new THREE.Vector2(
 );
 export const WORLD_BOUNDARY_RADIUS_M = DEFAULT_LEVEL_DEFINITION.worldBoundary.radius;
 
-/** How many texture repeats per metre. Grass is coarse; dirt slightly tighter. */
+/** How many texture repeats per metre. Grass is coarse. */
 const GRASS_TILES_PER_METRE = 0.2;
-const PATH_TILES_PER_METRE = 0.35;
+/**
+ * Ground is still "one meadow", but we subdivide it so a far-north band can
+ * be lifted into soft relief without affecting the flat playable centre.
+ */
+const GROUND_SEGMENTS = 160;
 /**
  * Paving stones: physical tile is ~1.25 m × 2.5 m on the ambientCG
  * scan. We tighten the repeat a touch (0.6 tiles/m) so individual
@@ -116,59 +122,130 @@ function tupleWaypoints(path: LevelPathDefinition): ReadonlyArray<readonly [numb
   return path.waypoints.map((wp) => [wp.x, wp.z] as const);
 }
 
-/** Tiny soft dot for Points billboards — keeps glow very subtle vs harsh squares. */
-function createSparkleDotTexture(): THREE.CanvasTexture {
-  const s = 48;
-  const canvas = document.createElement('canvas');
-  canvas.width = s;
-  canvas.height = s;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    return new THREE.CanvasTexture(canvas);
-  }
-  const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s * 0.48);
-  g.addColorStop(0, 'rgba(255, 248, 230, 0.95)');
-  g.addColorStop(0.25, 'rgba(255, 240, 210, 0.35)');
-  g.addColorStop(1, 'rgba(255, 240, 210, 0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, s, s);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
+/**
+ * Terrain-relief experiment on a large decorative ground plane. The playable
+ * area stays exactly the same; only the OUTER edge of the big world lifts so
+ * the far horizon reads as distant hills instead of a hard flat cutoff.
+ *
+ * PlaneGeometry lives in local XY before we rotate it onto the XZ ground:
+ *   - local x -> world x
+ *   - local y -> world -z
+ *   - local z -> world y (height)
+ *
+ * So to sculpt the meadow we derive world z as `-localY`, then write the
+ * height into local `z`.
+ */
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  const t = THREE.MathUtils.clamp((value - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
 }
 
-function createStaticRingSparkles(
-  ringR: number,
-  count: number,
-  color: number,
-  dotTex: THREE.Texture,
-  opts: { maxY: number; opacity: number; size: number },
-): THREE.Points {
-  const positions = new Float32Array(count * 3);
-  for (let i = 0; i < count; i++) {
-    const a = (i / count) * Math.PI * 2 + (i % 3) * 0.11;
-    positions[i * 3] = Math.cos(a) * ringR;
-    positions[i * 3 + 1] = (((i * 0.6180339887) % 1) * 0.85 + 0.05) * opts.maxY;
-    positions[i * 3 + 2] = Math.sin(a) * ringR;
+function sculptGroundReliefAroundPlaySpace(
+  geometry: THREE.PlaneGeometry,
+  groundSize: number,
+  playableCenterX: number,
+  playableCenterZ: number,
+  playableRadius: number,
+): void {
+  const pos = geometry.attributes.position as THREE.BufferAttribute | undefined;
+  if (!pos) return;
+  const half = groundSize * 0.5;
+  const edgeSpan = 220;
+
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const z = -pos.getY(i);
+    const dx = x - playableCenterX;
+    const dz = z - playableCenterZ;
+
+    const nx = Math.abs(x) / half;
+    const nz = Math.abs(z) / half;
+    // Rounded-square distance to the outer map limit. Using a superellipse
+    // instead of `max(abs(x), abs(z))` removes the hard corner seam that was
+    // appearing where two square-edge ramps met.
+    const edgeNorm = Math.pow(Math.pow(nx, 4) + Math.pow(nz, 4), 0.25);
+    const edgeDist = half * (1 - edgeNorm);
+    const edgeT = 1 - smoothstep(0, edgeSpan, Math.max(0, edgeDist));
+
+    const theta = Math.atan2(dz, dx);
+    const ringWave =
+      0.8 +
+      0.12 * Math.sin(theta * 2.0 + 0.35) +
+      0.08 * Math.sin(theta * 5.0 - 0.9) +
+      0.05 * Math.sin((dx / half) * Math.PI * 1.35 + (dz / half) * Math.PI * 1.1);
+    const ringStrength = Math.max(0.34, ringWave);
+    const ringRise =
+      edgeT *
+      edgeT *
+      (24 + 34 * ringStrength);
+
+    pos.setZ(i, ringRise);
   }
-  const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  const mat = new THREE.PointsMaterial({
-    map: dotTex,
-    color,
-    size: opts.size,
-    sizeAttenuation: true,
+
+  pos.needsUpdate = true;
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+}
+
+/**
+ * Soft "light column" rising from a circular ring. Replaces the old
+ * scattered sparkle dots: a thin open cylinder at the ring radius with
+ * additive blending and a vertical alpha gradient that fades from the
+ * base (on the ring) up into nothing. Reads as a halo of light standing
+ * off the aro rather than random glitter — more consistent with the
+ * ring itself and easier on the eye.
+ */
+function createRingAuraColumn(
+  ringR: number,
+  color: number,
+  opts: { height: number; opacity: number },
+): THREE.Mesh {
+  // Open-ended cylinder wall. DoubleSide so it glows from both inside
+  // and outside — with additive blending this gives the column a bit
+  // of visible thickness without needing two concentric shells.
+  const geom = new THREE.CylinderGeometry(ringR, ringR, opts.height, 64, 1, true);
+  const mat = new THREE.ShaderMaterial({
     transparent: true,
-    opacity: opts.opacity,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
     toneMapped: false,
+    uniforms: {
+      uColor: { value: new THREE.Color(color) },
+      uOpacity: { value: opts.opacity },
+    },
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      precision mediump float;
+      varying vec2 vUv;
+      uniform vec3 uColor;
+      uniform float uOpacity;
+      void main() {
+        // CylinderGeometry UVs run 0 at bottom → 1 at top; fade so the
+        // base sits bright on the ring and the column dissolves as it
+        // rises. The pow() curve keeps the base "grounded" and makes
+        // the top taper quickly instead of a flat linear fade.
+        float t = clamp(vUv.y, 0.0, 1.0);
+        float a = pow(1.0 - t, 1.8);
+        gl_FragColor = vec4(uColor, a * uOpacity);
+      }
+    `,
   });
-  const pts = new THREE.Points(geom, mat);
-  pts.frustumCulled = false;
-  pts.renderOrder = 1;
-  pts.userData.disposeManaged = true;
-  return pts;
+  const mesh = new THREE.Mesh(geom, mat);
+  // Cylinder origin is at its centre, so lift by half-height to sit on
+  // the ground plane. Caller positions the wrapping group at the ring.
+  mesh.position.y = opts.height * 0.5;
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 1;
+  mesh.userData.disposeManaged = true;
+  return mesh;
 }
 
 export function createLevel(definition: LevelDefinition = DEFAULT_LEVEL_DEFINITION): Level {
@@ -176,8 +253,21 @@ export function createLevel(definition: LevelDefinition = DEFAULT_LEVEL_DEFINITI
   group.name = 'level';
 
   // Placeholder grass colour until the PBR material loads.
+  const groundGeometry = new THREE.PlaneGeometry(
+    definition.groundSize,
+    definition.groundSize,
+    GROUND_SEGMENTS,
+    GROUND_SEGMENTS,
+  );
+  sculptGroundReliefAroundPlaySpace(
+    groundGeometry,
+    definition.groundSize,
+    definition.worldBoundary.centerX,
+    definition.worldBoundary.centerZ,
+    definition.worldBoundary.radius,
+  );
   const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(definition.groundSize, definition.groundSize),
+    groundGeometry,
     new THREE.MeshStandardMaterial({
       color: 0x4a5a3a,
       roughness: 0.95,
@@ -190,13 +280,6 @@ export function createLevel(definition: LevelDefinition = DEFAULT_LEVEL_DEFINITI
   ground.name = 'ground';
   ground.userData.disposeManaged = true;
   group.add(ground);
-
-  const path = buildCurvedPath(
-    tupleWaypoints(definition.mainPath),
-    definition.mainPath.width,
-    definition.mainPath.yLift ?? 0.01,
-  );
-  group.add(path.mesh);
 
   const pavedPaths: PathMesh[] = definition.pavedPaths.map((pp) =>
     buildCurvedPath(tupleWaypoints(pp), pp.width, pp.yLift ?? 0.04),
@@ -230,22 +313,18 @@ export function createLevel(definition: LevelDefinition = DEFAULT_LEVEL_DEFINITI
   goalRing.userData.disposeManaged = true;
   group.add(goalRing);
 
-  const dotTex = createSparkleDotTexture();
   const goalRingR = (goalRingInner + goalRingOuter) * 0.5;
-  const goalSparkles = createStaticRingSparkles(
-    goalRingR,
-    18,
-    0xfff3dd,
-    dotTex,
-    { maxY: 0.38, opacity: 0.2, size: 2.1 },
-  );
-  goalSparkles.name = 'goal-sparkles';
+  const goalAura = createRingAuraColumn(goalRingR, 0xfff3dd, {
+    height: 0.55,
+    opacity: 0.32,
+  });
+  goalAura.name = 'goal-aura';
 
-  const goalSparkGroup = new THREE.Group();
-  goalSparkGroup.name = 'goal-spark-group';
-  goalSparkGroup.position.copy(goal).setY(0.04);
-  goalSparkGroup.add(goalSparkles);
-  group.add(goalSparkGroup);
+  const goalAuraGroup = new THREE.Group();
+  goalAuraGroup.name = 'goal-aura-group';
+  goalAuraGroup.position.copy(goal).setY(0.04);
+  goalAuraGroup.add(goalAura);
+  group.add(goalAuraGroup);
 
   const goalAnchor = new THREE.Group();
   goalAnchor.name = 'goal-anchor';
@@ -255,13 +334,13 @@ export function createLevel(definition: LevelDefinition = DEFAULT_LEVEL_DEFINITI
   function setGoalPosition(position: THREE.Vector3) {
     goal.copy(position).setY(0);
     goalRing.position.set(position.x, 0.05, position.z);
-    goalSparkGroup.position.set(position.x, 0.04, position.z);
+    goalAuraGroup.position.set(position.x, 0.04, position.z);
     goalAnchor.position.set(position.x, 0, position.z);
   }
 
-  // Houses scattered across the grass plane (not hugging the path) so the
-  // world reads as open countryside with occasional buildings. Positions
-  // stay |x| ≫ path width and clear `DREAM_GOALS` in progression.ts once
+  // Houses scattered across the grass plane so the world reads as open
+  // countryside with occasional buildings. Positions clear `DREAM_GOALS` in
+  // progression.ts once
   // `loadLevelHouses` applies the real ~7m footprint. Placeholder halfX/halfZ
   // are only used until then.
   const houseObstacles: Obstacle[] = definition.houseSlots.map((slot) =>
@@ -302,20 +381,17 @@ export function createLevel(definition: LevelDefinition = DEFAULT_LEVEL_DEFINITI
   spawnMarker.userData.disposeManaged = true;
   group.add(spawnMarker);
 
-  const spawnRingMid = (spawnRingInner + spawnRingOuter) * 0.5 * 0.92;
-  const spawnSparkles = createStaticRingSparkles(
-    spawnRingMid,
-    14,
-    0xc8d8ff,
-    dotTex,
-    { maxY: 0.32, opacity: 0.18, size: 2.0 },
-  );
-  spawnSparkles.name = 'spawn-sparkles';
-  const spawnSparkGroup = new THREE.Group();
-  spawnSparkGroup.name = 'spawn-spark-group';
-  spawnSparkGroup.position.copy(spawn).setY(0.035);
-  spawnSparkGroup.add(spawnSparkles);
-  group.add(spawnSparkGroup);
+  const spawnRingMid = (spawnRingInner + spawnRingOuter) * 0.5;
+  const spawnAura = createRingAuraColumn(spawnRingMid, 0xc8d8ff, {
+    height: 0.45,
+    opacity: 0.26,
+  });
+  spawnAura.name = 'spawn-aura';
+  const spawnAuraGroup = new THREE.Group();
+  spawnAuraGroup.name = 'spawn-aura-group';
+  spawnAuraGroup.position.copy(spawn).setY(0.035);
+  spawnAuraGroup.add(spawnAura);
+  group.add(spawnAuraGroup);
 
   function addObstacles(extra: readonly Obstacle[]) {
     for (const o of extra) {
@@ -332,7 +408,6 @@ export function createLevel(definition: LevelDefinition = DEFAULT_LEVEL_DEFINITI
     obstacles,
     houseObstacles,
     ground,
-    path,
     pavedPaths,
     goalAnchor,
     setGoalPosition,
@@ -341,7 +416,7 @@ export function createLevel(definition: LevelDefinition = DEFAULT_LEVEL_DEFINITI
 }
 
 /**
- * Load grass + dirt PBR materials and swap them into the level.
+ * Load grass + paving PBR materials and swap them into the level.
  * Kicked off from main.ts after `createLevel()`; gameplay runs with placeholder
  * colours until this resolves.
  */
@@ -349,7 +424,7 @@ export async function loadLevelTextures(
   level: Level,
   renderer: THREE.WebGLRenderer,
 ): Promise<void> {
-  const [grass, dirt, paving] = await Promise.all([
+  const [grass, paving] = await Promise.all([
     // Grass: we intentionally skip the roughness map. Grass003's roughness
     // map has bright (shiny) pockets that, under the HDRI sun, read as
     // "wet" / liquid spots — completely wrong for a matte meadow. Flat
@@ -371,19 +446,6 @@ export async function loadLevelTextures(
     loadPbrMaterial(
       renderer,
       {
-        color: '/textures/ground037/Ground037_1K-JPG_Color.jpg',
-        normal: '/textures/ground037/Ground037_1K-JPG_NormalGL.jpg',
-        roughness: '/textures/ground037/Ground037_1K-JPG_Roughness.jpg',
-      },
-      {
-        tilesPerMetre: PATH_TILES_PER_METRE,
-        normalScale: 0.7,
-        name: 'dirt-path',
-      },
-    ),
-    loadPbrMaterial(
-      renderer,
-      {
         color: '/textures/pavingstones138/PavingStones138_2K-JPG_Color.jpg',
         normal: '/textures/pavingstones138/PavingStones138_2K-JPG_NormalGL.jpg',
         roughness: '/textures/pavingstones138/PavingStones138_2K-JPG_Roughness.jpg',
@@ -400,18 +462,6 @@ export async function loadLevelTextures(
   const oldGround = level.ground.material as THREE.Material;
   level.ground.material = grass.material;
   oldGround.dispose();
-
-  // Path UVs are normalised 0..1 across width and 0..1 along length, so
-  // we pass the real dimensions here to drive the texture repeat.
-  dirt.setPlaneSize(level.path.width, level.path.length);
-  // Match the placeholder's polygon offset (see `buildCurvedPath`) so
-  // the textured dirt also wins the z-test against the grass plane.
-  dirt.material.polygonOffset = true;
-  dirt.material.polygonOffsetFactor = -2;
-  dirt.material.polygonOffsetUnits = -2;
-  const oldPath = level.path.mesh.material as THREE.Material;
-  level.path.mesh.material = dirt.material;
-  oldPath.dispose();
 
   // Each paving spur has its own length, so it gets its own material
   // instance with cloned textures — Texture#clone shares the GPU
@@ -473,41 +523,36 @@ function makeBox(
 }
 
 /**
- * URLs of every house variant we ship. The first entry is the original
- * thatched house (kept for backwards compat); the rest are the Apr-2026
- * Meshy-AI batch added for visual variety. Slots are assigned a variant
- * by `slot index % HOUSE_VARIANT_URLS.length` so the village reads as a
- * mix of building styles instead of a copy-paste.
- */
-const HOUSE_VARIANT_URLS: readonly string[] = [
-  '/models/house-opt.glb',
-  '/models/house-2-opt.glb',
-  '/models/house-3-opt.glb',
-  '/models/house-4-opt.glb',
-  '/models/house-tank-opt.glb',
-];
-
-/**
- * Swap each placeholder obstacle box for one of the loaded house variants
- * (round-robin by index), rotated by a different multiple of 90° for a
- * bit more variety. Collision AABBs (`halfX`, `halfZ`, `halfY`) and the
- * box-centre Y are updated from the chosen variant's footprint so the
- * player can't walk through walls of *any* of the houses.
+ * Swap each placeholder obstacle box for the loaded house variant authored
+ * on its slot (or a round-robin fallback for legacy slots without `variant`).
+ * Collision AABBs (`halfX`, `halfZ`, `halfY`) and the box-centre Y are updated
+ * from the chosen variant's footprint so the player can't walk through walls
+ * of *any* of the houses.
  *
  * Runs async: gameplay starts on the placeholder boxes and upgrades
  * seamlessly once the GLBs resolve. Variants load in parallel so the
  * upgrade is a single pop, not a staggered cascade.
  */
 export async function loadLevelHouses(level: Level): Promise<void> {
-  const houses = await Promise.all(HOUSE_VARIANT_URLS.map((u) => loadHouseModel(u)));
+  const requestedVariants = level.definition.houseSlots.map((slot, i) =>
+    resolveHouseVariant(slot, i),
+  );
+  const uniqueVariants = Array.from(
+    new Set<HouseVariantKind>([...requestedVariants, ...HOUSE_VARIANT_KINDS]),
+  );
+  const modelEntries = await Promise.all(
+    uniqueVariants.map(async (v) => [v, await loadHouseModel(HOUSE_VARIANT_URLS[v])] as const),
+  );
+  const models = new Map<HouseVariantKind, HouseModel>(modelEntries);
 
   for (let i = 0; i < level.houseObstacles.length; i++) {
     const obstacle = level.houseObstacles[i];
     if (!obstacle) continue;
 
-    const variant = houses[i % houses.length]!;
+    const variantKind = requestedVariants[i] ?? HOUSE_VARIANT_KINDS[0]!;
+    const model = models.get(variantKind)!;
     const slot = level.definition.houseSlots[i];
-    const instance = variant.instance();
+    const instance = model.instance();
     instance.position.set(obstacle.center.x, 0, obstacle.center.z);
     instance.rotation.y = slot?.yaw ?? 0;
     level.group.add(instance);
@@ -520,207 +565,63 @@ export async function loadLevelHouses(level: Level): Promise<void> {
     else mat?.dispose();
 
     obstacle.visual = instance;
-    obstacle.halfX = variant.halfX;
-    obstacle.halfZ = variant.halfZ;
-    obstacle.halfY = variant.halfY;
-    obstacle.center.y = variant.halfY;
+    obstacle.halfX = model.halfX;
+    obstacle.halfZ = model.halfZ;
+    obstacle.halfY = model.halfY;
+    obstacle.center.y = model.halfY;
   }
 }
 
-/**
- * Detailed tree variants used as standalone scatter inside the play
- * area. ~250 k triangles each — fine for a handful of close-up
- * instances; we deliberately don't have a "backdrop ring" anymore, so
- * the trees the player sees are always these detailed ones.
- */
-const TREE_DETAILED_URLS: readonly string[] = [
-  '/models/tree-1-opt.glb',
-  '/models/tree-2-opt.glb',
-];
-
-/** Deterministic 0..1 pseudo-noise so scatter is irregular but stable. */
-function treeHash01(i: number, salt: number): number {
-  const t = Math.sin(i * 91.7517 + salt * 27.481 + 13.0) * 17317.5453;
-  return t - Math.floor(t);
-}
+export { loadLevelSceneryProps } from './sceneryProps';
 
 /**
- * Sample the centreline of a paving-path waypoint set into evenly-spaced
- * XZ points so we can quickly reject tree candidates that would sit on
- * the stones. We reuse the same Catmull-Rom curve `buildCurvedPath`
- * uses, so the sampled centre is exactly the visual centre.
- */
-function samplePathCentreline(
-  path: LevelPathDefinition,
-  spacingMetres: number,
-): THREE.Vector2[] {
-  const curve = new THREE.CatmullRomCurve3(
-    path.waypoints.map((wp) => new THREE.Vector3(wp.x, 0, wp.z)),
-    false,
-    'catmullrom',
-    0.5,
-  );
-  const samples = Math.max(8, Math.round(curve.getLength() / spacingMetres));
-  return curve
-    .getSpacedPoints(samples)
-    .map((p) => new THREE.Vector2(p.x, p.z));
-}
-
-/**
- * Reject a candidate tree centre that would block any path, sit on top
- * of the spawn / a goal / a house / an existing obstacle, or crowd
- * another tree.
- */
-function treeSiteOk(
-  x: number,
-  z: number,
-  placed: readonly THREE.Vector2[],
-  obstacles: readonly Obstacle[],
-  goalCenters: readonly { x: number; z: number }[],
-  mainPathSamples: readonly THREE.Vector2[],
-  pavedPathSamples: readonly THREE.Vector2[],
-  spawn: THREE.Vector3,
-  minSpacingSq: number,
-  definition: LevelDefinition,
-): boolean {
-  const rules = definition.treeScatter;
-  const mainPathClearSq = rules.mainPathClearM * rules.mainPathClearM;
-  for (const s of mainPathSamples) {
-    const dx = x - s.x;
-    const dz = z - s.y;
-    if (dx * dx + dz * dz < mainPathClearSq) return false;
-  }
-  const dxs = x - spawn.x;
-  const dzs = z - spawn.z;
-  if (dxs * dxs + dzs * dzs < rules.spawnClearM * rules.spawnClearM) return false;
-  const pavedClearSq = rules.pavedPathClearM * rules.pavedPathClearM;
-  for (const s of pavedPathSamples) {
-    const dx = x - s.x;
-    const dz = z - s.y;
-    if (dx * dx + dz * dz < pavedClearSq) return false;
-  }
-  for (const g of goalCenters) {
-    const dx = x - g.x;
-    const dz = z - g.z;
-    if (dx * dx + dz * dz < rules.obstacleClearM * rules.obstacleClearM) return false;
-  }
-  for (const o of obstacles) {
-    const dx = x - o.center.x;
-    const dz = z - o.center.z;
-    // Houses are tagged by their bigger AABB → use the wider clearance.
-    // Anything else (billboards, previously-placed trees) gets the
-    // standard obstacle clearance.
-    const minD = o.halfX > 2.5 || o.halfZ > 2.5 ? rules.houseClearM : rules.obstacleClearM;
-    if (dx * dx + dz * dz < minD * minD) return false;
-  }
-  for (const p of placed) {
-    const dx = x - p.x;
-    const dz = z - p.y;
-    if (dx * dx + dz * dz < minSpacingSq) return false;
-  }
-  return true;
-}
-
-/**
- * Scatter a small set of detailed trees across the play area to break
- * up the open grass without turning it into a forest. Each tree is
- * registered as an obstacle (trunk-sized collider) so the player can
- * brush the foliage but can't walk through the trunk.
+ * Instantiate trees at each authored `treePlacement` position. Each tree
+ * registers a **trunk-sized** AABB obstacle so the player can brush the
+ * foliage but can't walk through the trunk.
  *
- * Notes:
- *  - All variants share geometry & materials via Three.js `clone(true)`;
- *    the GPU upload happens once per variant. With only ~8 instances,
- *    cloned meshes are simpler than `InstancedMesh` and let each tree
- *    pick its own variant + scale jitter trivially.
- *  - Placement is deterministic (hash-seeded) so reloads keep the same
- *    layout. No per-frame work.
+ * Trees load in parallel once per distinct variant; the per-placement
+ * work is just a cheap `clone(true)` + transform. Gameplay continues
+ * without trees until the GLBs resolve.
  *
- * Runs async; gameplay continues without trees until the GLBs resolve.
+ * `goals` is kept for API compatibility with the existing call site but
+ * is unused: positions are fully authored now, no runtime avoidance.
  */
 export async function loadLevelTrees(
   level: Level,
-  goals: ReadonlyArray<{ x: number; z: number }>,
+  _goals: ReadonlyArray<{ x: number; z: number }>,
 ): Promise<void> {
-  const treeScatter = level.definition.treeScatter;
-  const foregroundVariants = await Promise.all(
-    TREE_DETAILED_URLS.map((u) => loadTreeModel(u, treeScatter.footprintM)),
+  const placements = level.definition.trees;
+  if (placements.length === 0) return;
+
+  const uniqueVariants = Array.from(new Set(placements.map((p) => p.variant))) as TreeVariantKind[];
+  const modelPairs = await Promise.all(
+    uniqueVariants.map(async (variant) => {
+      const url = TREE_VARIANT_URLS[variant];
+      const model = await loadTreeModel(url);
+      return [variant, model] as const;
+    }),
   );
+  const models = new Map<TreeVariantKind, TreeModel>(modelPairs);
 
-  const minSpacingSq = treeScatter.minSpacingM * treeScatter.minSpacingM;
+  // Trunk collider radius, in metres. Scales with the world-scale applied
+  // to scattered trees so the collider matches the visual trunk girth.
+  const trunkR = 0.7 * TREE_SCATTER_WORLD_SCALE;
 
-  // Sample every paving-stone spur so trees can avoid the stones —
-  // 1.2 m spacing keeps the polyline approximation tight enough that
-  // the clearance radius doesn't leak.
-  const mainPathSamples = samplePathCentreline(level.definition.mainPath, 1.2);
-  const pavedPathSamples: THREE.Vector2[] = [];
-  for (const pp of level.definition.pavedPaths) {
-    pavedPathSamples.push(...samplePathCentreline(pp, 1.2));
-  }
-
-  const foregroundCenters: THREE.Vector2[] = [];
   const newObstacles: Obstacle[] = [];
-
-  for (let i = 0; i < treeScatter.count; i++) {
-    const variant = foregroundVariants[i % foregroundVariants.length]!;
-    let placed = false;
-
-    for (let attempt = 0; attempt < 200; attempt++) {
-      const seed = i * 1597 + attempt * 71 + 9;
-      const rx = treeHash01(seed, 0);
-      const rz = treeHash01(seed, 1);
-      const x =
-        treeScatter.bounds.minX +
-        rx * (treeScatter.bounds.maxX - treeScatter.bounds.minX);
-      const z =
-        treeScatter.bounds.minZ +
-        rz * (treeScatter.bounds.maxZ - treeScatter.bounds.minZ);
-
-      if (
-        !treeSiteOk(
-          x,
-          z,
-          foregroundCenters,
-          level.obstacles,
-          goals,
-          mainPathSamples,
-          pavedPathSamples,
-          level.spawn,
-          minSpacingSq,
-          level.definition,
-        )
-      ) {
-        continue;
-      }
-
-      const yawSeed = i * 311 + 5;
-      const yaw = treeHash01(yawSeed, 0) * Math.PI * 2;
-      const scaleJitter = 0.85 + treeHash01(yawSeed, 1) * 0.35; // 0.85..1.20
-
-      const instance = variant.instance();
-      instance.position.set(x, 0, z);
-      instance.rotation.y = yaw;
-      instance.scale.multiplyScalar(scaleJitter);
-      level.group.add(instance);
-
-      foregroundCenters.push(new THREE.Vector2(x, z));
-      // Collider hugs the trunk (not the crown) so the player can
-      // brush the foliage without a hard wall. Scales with the tree
-      // so a 1.2× tree gets a slightly chunkier trunk too.
-      const trunkR = 0.7 * scaleJitter;
-      newObstacles.push({
-        center: new THREE.Vector3(x, variant.halfY * scaleJitter, z),
-        halfX: trunkR,
-        halfZ: trunkR,
-        halfY: variant.halfY * scaleJitter,
-        visual: instance,
-      });
-      placed = true;
-      break;
-    }
-
-    if (!placed) {
-      console.debug(`[trees] could not place foreground tree #${i}`);
-    }
+  for (const p of placements) {
+    const model = models.get(p.variant);
+    if (!model) continue;
+    const instance = model.instance();
+    instance.position.set(p.x, 0, p.z);
+    instance.rotation.y = p.yaw;
+    level.group.add(instance);
+    newObstacles.push({
+      center: new THREE.Vector3(p.x, model.halfY, p.z),
+      halfX: trunkR,
+      halfZ: trunkR,
+      halfY: model.halfY,
+      visual: instance,
+    });
   }
 
   level.addObstacles(newObstacles);

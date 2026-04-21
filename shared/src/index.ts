@@ -35,3 +35,11 @@ export type {
   LeaderboardEntry,
   LeaderboardResponse,
 } from './leaderboard.js';
+
+export {
+  UNKNOWN_COUNTRY_FLAG_EMOJI,
+  countryCodeToFlagEmoji,
+  countryCodeToFlagEmojiOrUn,
+  isCountryCode,
+  normaliseCountryCode,
+} from './country.js';

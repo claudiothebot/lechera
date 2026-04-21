@@ -13,6 +13,16 @@ export interface LeaderboardEntry {
   best_round_milk: number;
   /** ISO 8601 UTC timestamp from Postgres. */
   last_played: string;
+  /**
+   * ISO 3166-1 alpha-2 country code captured at the player's last join
+   * (e.g. `'ES'`, `'US'`). `null` when the server could not geolocate
+   * the IP (local connections, VPNs, private networks, lookup failures)
+   * OR when the database row pre-dates the Phase 7 migration. The RPC
+   * intentionally keeps the previous value when the new one is null
+   * (`coalesce(excluded.country, rankings.country)`) so a single failed
+   * lookup doesn't blank an already-known country.
+   */
+  country: string | null;
 }
 
 /**

@@ -8,6 +8,18 @@ import type {
 import type { Tweet } from './tweetCanvas';
 import type { TweetBillboardPlacement } from './tweetBillboards';
 
+/**
+ * Billboards are now fully authored (explicit placements in the level
+ * definition, edited via `levelEditor.ts`). This module exposes two
+ * things:
+ *  - `buildBillboardPlacements`: convert the stored placements into
+ *    runtime `TweetBillboardPlacement`s consumable by `tweetBillboards.ts`.
+ *  - `generateBillboardPlacements`: one-click seed used by the editor's
+ *    "Auto-generate" action, so authors can start from a scatter and
+ *    then tweak individual positions by hand. This is the only place
+ *    where the old scatter logic still lives.
+ */
+
 function billboardHash01(i: number, salt: number, seedBase: number): number {
   const t = Math.sin(i * 12.9898 + salt * 78.233 + seedBase) * 43758.5453;
   return t - Math.floor(t);
@@ -29,6 +41,49 @@ function samplePathCentreline(
     .map((p) => new THREE.Vector2(p.x, p.z));
 }
 
+/**
+ * Convert authored `BillboardPlacementDefinition[]` + a tweets array
+ * into `TweetBillboardPlacement[]` for `tweetBillboards.ts`.
+ */
+export function buildBillboardPlacements(
+  definition: LevelDefinition,
+  _obstacles: readonly Obstacle[],
+  _goals: readonly { x: number; z: number }[],
+  tweets: readonly Tweet[],
+  _spawn: { x: number; z: number },
+): TweetBillboardPlacement[] {
+  const placements = definition.billboards;
+  return placements.map((p, i) => {
+    const tweetIdx = p.tweetIndex ?? i;
+    const tweet = tweets[tweetIdx % tweets.length] ?? tweets[0];
+    if (!tweet) {
+      throw new Error('[billboards] no tweets available');
+    }
+    return {
+      position: new THREE.Vector3(p.x, 0, p.z),
+      facing: new THREE.Vector3(Math.cos(p.yaw), 0, Math.sin(p.yaw)),
+      tweet,
+    };
+  });
+}
+
+/**
+ * Default scatter options used by the editor's "Auto-generate" action.
+ * Matches the old procedural layout constants that used to live in the
+ * level definition, moved here as code since billboards are authored now.
+ */
+const AUTO_GENERATE_DEFAULTS = {
+  count: 10,
+  playArea: { minX: -30, maxX: 30, minZ: -36, maxZ: 22 },
+  minSpacingM: 12,
+  pathClearM: 4,
+  spawnClearM: 6,
+  goalClearM: 4,
+  houseClearM: 6,
+  spawnFacingMinDistM: 9,
+  spawnFacingMaxDistM: 14,
+};
+
 function billboardSiteOk(
   x: number,
   z: number,
@@ -37,9 +92,8 @@ function billboardSiteOk(
   obstacles: readonly Obstacle[],
   goals: readonly { x: number; z: number }[],
   spawn: { x: number; z: number },
-  definition: LevelDefinition,
 ): boolean {
-  const rules = definition.billboards;
+  const rules = AUTO_GENERATE_DEFAULTS;
   const pathClearSq = rules.pathClearM * rules.pathClearM;
   for (const s of pathSamples) {
     const dx = x - s.x;
@@ -74,142 +128,80 @@ function billboardSiteOk(
   return true;
 }
 
-function buildManualPlacements(
-  definition: LevelDefinition,
-  tweets: readonly Tweet[],
-): TweetBillboardPlacement[] {
-  const placements = definition.billboards.placements;
-  return placements.map((p, i) => ({
-    position: new THREE.Vector3(p.x, 0, p.z),
-    facing: new THREE.Vector3(Math.cos(p.yaw), 0, Math.sin(p.yaw)),
-    tweet: tweets[p.tweetIndex ?? (i % tweets.length)] ?? tweets[i % tweets.length] ?? tweets[0]!,
-  }));
-}
-
-export function buildBillboardPlacements(
-  definition: LevelDefinition,
-  obstacles: readonly Obstacle[],
-  goals: readonly { x: number; z: number }[],
-  tweets: readonly Tweet[],
-  spawn: { x: number; z: number },
-): TweetBillboardPlacement[] {
-  if (definition.billboards.mode === 'manual') {
-    return buildManualPlacements(definition, tweets);
-  }
-
-  const picks = tweets.slice(0, definition.billboards.count);
-  const placed: THREE.Vector2[] = [];
-  const out: TweetBillboardPlacement[] = [];
-  const pathSamples: THREE.Vector2[] = [
-    ...samplePathCentreline(definition.mainPath, 1.4),
-    ...definition.pavedPaths.flatMap((pp) => samplePathCentreline(pp, 1.2)),
-  ];
-
-  for (let i = 0; i < picks.length; i++) {
-    const tweet = picks[i]!;
-    let chosen: { x: number; z: number; facing: THREE.Vector3 } | null = null;
-
-    if (i === 0) {
-      for (let attempt = 0; attempt < 200; attempt++) {
-        const seed = attempt * 113 + 7;
-        const r0 = billboardHash01(seed, 0, definition.billboards.count);
-        const r1 = billboardHash01(seed, 1, definition.billboards.count);
-        const r2 = billboardHash01(seed, 2, definition.billboards.count);
-        const dist =
-          definition.billboards.spawnFacingMinDistM +
-          r0 *
-            (definition.billboards.spawnFacingMaxDistM -
-              definition.billboards.spawnFacingMinDistM);
-        const side = r1 < 0.5 ? -1 : 1;
-        const offAxis = (0.27 + r2 * 0.6) * side;
-        const angle = -Math.PI / 2 + offAxis;
-        const x = spawn.x + Math.cos(angle) * dist;
-        const z = spawn.z + Math.sin(angle) * dist;
-        if (!billboardSiteOk(x, z, placed, pathSamples, obstacles, goals, spawn, definition)) {
-          continue;
-        }
-        const fx = spawn.x - x;
-        const fz = spawn.z - z;
-        const flen = Math.hypot(fx, fz) || 1;
-        chosen = {
-          x,
-          z,
-          facing: new THREE.Vector3(fx / flen, 0, fz / flen),
-        };
-        break;
-      }
-    } else {
-      for (let attempt = 0; attempt < 200; attempt++) {
-        const seed = i * 1009 + attempt * 89 + 31;
-        const rx = billboardHash01(seed, 0, definition.billboards.count);
-        const rz = billboardHash01(seed, 1, definition.billboards.count);
-        const ry = billboardHash01(seed, 2, definition.billboards.count);
-        const x =
-          definition.billboards.playArea.minX +
-          rx * (definition.billboards.playArea.maxX - definition.billboards.playArea.minX);
-        const z =
-          definition.billboards.playArea.minZ +
-          rz * (definition.billboards.playArea.maxZ - definition.billboards.playArea.minZ);
-        if (!billboardSiteOk(x, z, placed, pathSamples, obstacles, goals, spawn, definition)) {
-          continue;
-        }
-        const yaw = ry * Math.PI * 2;
-        chosen = {
-          x,
-          z,
-          facing: new THREE.Vector3(Math.cos(yaw), 0, Math.sin(yaw)),
-        };
-        break;
-      }
-    }
-
-    if (!chosen) {
-      const side = i % 2 === 0 ? -1 : 1;
-      const yaw = billboardHash01(i, 99, definition.billboards.count) * Math.PI * 2;
-      chosen = {
-        x: side * 14,
-        z: 16 - i * 7.5,
-        facing: new THREE.Vector3(Math.cos(yaw), 0, Math.sin(yaw)),
-      };
-    }
-
-    placed.push(new THREE.Vector2(chosen.x, chosen.z));
-    out.push({
-      position: new THREE.Vector3(chosen.x, 0, chosen.z),
-      facing: chosen.facing,
-      tweet,
-    });
-  }
-
-  return out;
-}
-
-export function seedManualBillboardsFromProcedural(
+/**
+ * Deterministic scatter used by the editor's "Auto-generate" action.
+ * Writes a full `BillboardPlacementDefinition[]` which the editor then
+ * lets the author tweak by hand. Not used at gameplay runtime.
+ */
+export function generateBillboardPlacements(
   definition: LevelDefinition,
   obstacles: readonly Obstacle[],
   goals: readonly { x: number; z: number }[],
   tweets: readonly Tweet[],
   spawn: { x: number; z: number },
 ): BillboardPlacementDefinition[] {
-  return buildBillboardPlacements(
-    {
-      ...definition,
-      billboards: {
-        ...definition.billboards,
-        mode: 'procedural',
-      },
-    },
-    obstacles,
-    goals,
-    tweets,
-    spawn,
-  ).map((placement, i) => ({
-    x: placement.position.x,
-    z: placement.position.z,
-    yaw: Math.atan2(
-      (placement.facing ?? new THREE.Vector3(1, 0, 0)).z,
-      (placement.facing ?? new THREE.Vector3(1, 0, 0)).x,
-    ),
-    tweetIndex: i,
-  }));
+  const rules = AUTO_GENERATE_DEFAULTS;
+  const picks = tweets.slice(0, rules.count);
+  const placed: THREE.Vector2[] = [];
+  const out: BillboardPlacementDefinition[] = [];
+  const pathSamples: THREE.Vector2[] = definition.pavedPaths.flatMap((pp) =>
+    samplePathCentreline(pp, 1.2),
+  );
+
+  for (let i = 0; i < picks.length; i++) {
+    let chosen: { x: number; z: number; yaw: number } | null = null;
+
+    if (i === 0) {
+      for (let attempt = 0; attempt < 200; attempt++) {
+        const seed = attempt * 113 + 7;
+        const r0 = billboardHash01(seed, 0, rules.count);
+        const r1 = billboardHash01(seed, 1, rules.count);
+        const r2 = billboardHash01(seed, 2, rules.count);
+        const dist =
+          rules.spawnFacingMinDistM +
+          r0 * (rules.spawnFacingMaxDistM - rules.spawnFacingMinDistM);
+        const side = r1 < 0.5 ? -1 : 1;
+        const offAxis = (0.27 + r2 * 0.6) * side;
+        const angle = -Math.PI / 2 + offAxis;
+        const x = spawn.x + Math.cos(angle) * dist;
+        const z = spawn.z + Math.sin(angle) * dist;
+        if (!billboardSiteOk(x, z, placed, pathSamples, obstacles, goals, spawn)) continue;
+        const fx = spawn.x - x;
+        const fz = spawn.z - z;
+        const yaw = Math.atan2(fz, fx);
+        chosen = { x, z, yaw };
+        break;
+      }
+    } else {
+      for (let attempt = 0; attempt < 200; attempt++) {
+        const seed = i * 1009 + attempt * 89 + 31;
+        const rx = billboardHash01(seed, 0, rules.count);
+        const rz = billboardHash01(seed, 1, rules.count);
+        const ry = billboardHash01(seed, 2, rules.count);
+        const x =
+          rules.playArea.minX + rx * (rules.playArea.maxX - rules.playArea.minX);
+        const z =
+          rules.playArea.minZ + rz * (rules.playArea.maxZ - rules.playArea.minZ);
+        if (!billboardSiteOk(x, z, placed, pathSamples, obstacles, goals, spawn)) continue;
+        chosen = { x, z, yaw: ry * Math.PI * 2 };
+        break;
+      }
+    }
+
+    if (!chosen) {
+      const side = i % 2 === 0 ? -1 : 1;
+      const yaw = billboardHash01(i, 99, rules.count) * Math.PI * 2;
+      chosen = { x: side * 14, z: 16 - i * 7.5, yaw };
+    }
+
+    placed.push(new THREE.Vector2(chosen.x, chosen.z));
+    out.push({
+      x: chosen.x,
+      z: chosen.z,
+      yaw: chosen.yaw,
+      tweetIndex: i,
+    });
+  }
+
+  return out;
 }

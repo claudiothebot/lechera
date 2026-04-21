@@ -1,5 +1,6 @@
-import { Room, type Client } from '@colyseus/core';
+import { Room, type AuthContext, type Client } from '@colyseus/core';
 import { Schema, MapSchema, defineTypes } from '@colyseus/schema';
+import geoip from 'geoip-lite';
 import {
   DELIVERY_TOLERANCE,
   GOAL_RADIUS,
@@ -7,6 +8,7 @@ import {
   MIN_NAME_LENGTH,
   goalFor,
   litresFor,
+  normaliseCountryCode,
   sanitiseName,
   spawnPositionInRing,
 } from '@milk-dreams/shared';
@@ -53,6 +55,15 @@ export class Player extends Schema {
    * "current dream" a poor proxy for total contribution.
    */
   litresDelivered = 0;
+  /**
+   * Phase 7 — ISO 3166-1 alpha-2 country code resolved from the
+   * client's IP in `onAuth`. Empty string when the lookup failed
+   * (localhost, private network, VPN, unknown range) — the schema
+   * doesn't allow `null` so we carry the "no data" sentinel as `''`.
+   * The server uses this for the leaderboard upsert; the client
+   * renders it as a flag next to the name when non-empty.
+   */
+  country = '';
 }
 defineTypes(Player, {
   name: 'string',
@@ -63,6 +74,7 @@ defineTypes(Player, {
   dreamIndex: 'number',
   litres: 'number',
   litresDelivered: 'number',
+  country: 'string',
 });
 
 /**
@@ -112,6 +124,60 @@ interface ClaimDeliveryMessage {
    */
   x?: number;
   z?: number;
+}
+
+/**
+ * Phase 7 — auth payload shape we hand off from `onAuth` to `onJoin`
+ * via Colyseus's `client.auth`. Geolocation happens exactly once (at
+ * the HTTP upgrade, when we still have the request headers), so the
+ * `country` resolved there is what we assign to the Player schema and
+ * eventually upsert into Supabase.
+ */
+interface AuthData {
+  /** ISO 3166-1 alpha-2 ('ES', 'US', ...) or empty string on failure. */
+  country: string;
+}
+
+/**
+ * Resolve a client IP from `AuthContext.ip` (which the ws-transport
+ * populates from `x-real-ip` → `x-forwarded-for` → `socket.remoteAddress`
+ * in that precedence order). Handles three real-world quirks:
+ *   - `ip` is typed as `string | string[]` by Colyseus (node's `http`
+ *     allows array headers). We take the first entry.
+ *   - Comma-separated XFF chains (`"203.0.113.5, 10.0.0.1"`) — the
+ *     original client is the leftmost entry.
+ *   - IPv4-mapped IPv6 (`::ffff:1.2.3.4`) — strip the prefix so
+ *     `geoip-lite` sees a plain IPv4 address (it supports both, but
+ *     the mapped form is a 'v6' path and some ranges only have v4 data).
+ */
+function extractClientIp(raw: string | string[] | undefined): string | null {
+  if (!raw) return null;
+  const first = Array.isArray(raw) ? raw[0] : raw;
+  if (!first) return null;
+  const head = first.split(',')[0]?.trim();
+  if (!head) return null;
+  if (head.startsWith('::ffff:')) return head.slice('::ffff:'.length);
+  return head;
+}
+
+/**
+ * Resolve a client IP to an ISO 3166-1 alpha-2 country code using the
+ * offline `geoip-lite` database. Returns `''` (empty string) on any
+ * miss so callers never have to special-case `null`.
+ *
+ * `geoip-lite` ships with a GeoLite2 snapshot that's baked in at
+ * install time and goes stale slowly — country assignments change on
+ * the order of years, so a yearly `pnpm exec geoip-lite-update` is
+ * more than enough maintenance for this casual game.
+ */
+function resolveCountryFromIp(ip: string | null): string {
+  if (!ip) return '';
+  try {
+    const lookup = geoip.lookup(ip);
+    return normaliseCountryCode(lookup?.country ?? null) ?? '';
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -303,6 +369,33 @@ export class MilkDreamsRoom extends Room<{ state: MilkDreamsState }> {
     );
   }
 
+  /**
+   * Phase 7 — capture the player's country from their IP BEFORE the
+   * join completes. `context.ip` comes from the ws-transport (set to
+   * `x-real-ip` / `x-forwarded-for` / socket remote address, in that
+   * order). Anything we return here lands on `client.auth` and is
+   * available from `onJoin`.
+   *
+   * We keep the "name validation rejects the join" contract in
+   * `onJoin` unchanged — `onAuth` is purely additive metadata. A
+   * failed geoip lookup is NOT a join rejection: most local dev
+   * traffic (127.0.0.1, LAN) won't resolve and that's fine; we store
+   * an empty country and move on. The Supabase `record_contribution`
+   * RPC treats null / empty as "don't overwrite the previous value",
+   * so a single bad lookup can't blank an already-known country.
+   */
+  override onAuth(_client: Client, _options: unknown, context: AuthContext): AuthData {
+    const ip = extractClientIp(context.ip);
+    const country = resolveCountryFromIp(ip);
+    if (ip && !country) {
+      // Logged at info level because it's the common case in dev
+      // (localhost) and not an error. Noisy in production would
+      // indicate every client is unresolvable (DB missing / stale).
+      console.log(`[room] geoip miss for ${ip}`);
+    }
+    return { country };
+  }
+
   override onJoin(client: Client, options?: JoinOptions): void {
     // Phase 6a — names are mandatory (min 3 chars). Validation is the
     // SAME function the client uses (`@milk-dreams/shared:sanitiseName`)
@@ -318,6 +411,11 @@ export class MilkDreamsRoom extends Room<{ state: MilkDreamsState }> {
 
     const colorIndex = nextColorIndex++;
 
+    // `client.auth` carries the country we resolved in `onAuth`. The
+    // cast captures our AuthData shape — Colyseus types it as `any`
+    // since authorisation payloads are user-defined.
+    const auth = (client.auth ?? { country: '' }) as AuthData;
+
     const p = new Player();
     p.name = name;
     p.colorHue =
@@ -325,6 +423,7 @@ export class MilkDreamsRoom extends Room<{ state: MilkDreamsState }> {
     p.dreamIndex = 0;
     p.litres = litresFor(0);
     p.litresDelivered = 0;
+    p.country = auth.country;
 
     // Phase 6b — spawn ring. Only used for the very first pose so that
     // 10 lecheras joining at once don't materialise on top of each
@@ -358,7 +457,7 @@ export class MilkDreamsRoom extends Room<{ state: MilkDreamsState }> {
     this.state.players.set(client.sessionId, p);
     console.log(
       `[room] join  ${client.sessionId}  ->  ${p.name} (hue ${p.colorHue.toFixed(2)}) ` +
-        `spawn=(${p.x.toFixed(1)},${p.z.toFixed(1)}) phase=${this.state.phase}`,
+        `spawn=(${p.x.toFixed(1)},${p.z.toFixed(1)}) country=${p.country || '??'} phase=${this.state.phase}`,
     );
   }
 
@@ -438,11 +537,18 @@ export class MilkDreamsRoom extends Room<{ state: MilkDreamsState }> {
     // `MULTIPLAYER.md` — so two different sessions claiming the same
     // name will accumulate into the same row. Acceptable for a casual
     // party game.
-    const contributions: { name: string; litres: number }[] = [];
+    const contributions: { name: string; litres: number; country: string | null }[] = [];
     this.state.players.forEach((p) => {
       tops.push(`${p.name}=${p.litresDelivered}L(d${p.dreamIndex})`);
       if (p.litresDelivered > 0) {
-        contributions.push({ name: p.name, litres: p.litresDelivered });
+        contributions.push({
+          name: p.name,
+          litres: p.litresDelivered,
+          // Pass null (not empty string) so the Postgres RPC's
+          // coalesce keeps the previous value instead of overwriting
+          // with empty. Phase 7 — see `record_contribution` DDL.
+          country: p.country || null,
+        });
       }
     });
 

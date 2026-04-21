@@ -46,9 +46,11 @@ robust for casual internet play.
 - The meadow is no longer a flat placeholder only: it includes authored
   paths, houses, trees, tweet billboards, a minimap, a dream preview,
   soundtrack, and goal props.
-- There is an in-browser level editor behind `?editor=1`. Runtime level
-  data lives in `public/levels/level-01.json` and the supporting client
-  authoring code under `client/editor/` + `client/game/level*`.
+- There is an in-browser level editor behind `?editor=1`. Authoring data
+  lives in `public/levels/level-01.json`; the loader can optionally prefer
+  a derived runtime artifact via `VITE_LEVEL_RUNTIME_PATH` and fall back to
+  the JSON source. Supporting client authoring code lives under
+  `client/editor/` + `client/game/level*`.
 
 ## Still out of scope
 

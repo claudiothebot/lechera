@@ -44,6 +44,11 @@ export interface RemotePlayerView {
    * ranks by this number, not by `dreamIndex`.
    */
   litresDelivered: number;
+  /**
+   * Phase 7 — ISO 3166-1 alpha-2 from server `onAuth` geoip (e.g. `'ES'`).
+   * Empty string when geolocation missed; HUD treats that as "no flag".
+   */
+  country: string;
 }
 
 export interface RemotePlayerEvents {

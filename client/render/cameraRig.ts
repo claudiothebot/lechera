@@ -20,7 +20,7 @@ import * as THREE from 'three';
  * in radians, the cosine/sine don't care).
  */
 const DEFAULT_DISTANCE = 5.0;
-const DEFAULT_HEIGHT = 2.75;
+const DEFAULT_HEIGHT = 2.2;
 /** Point on the player the camera looks at (metres above feet). ~upper chest. */
 const LOOK_HEIGHT = 1.35;
 const POS_LAMBDA = 8.0;

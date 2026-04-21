@@ -7,6 +7,8 @@
  * On 'spilled'/'timeout' the HUD shows a final summary with total litres
  * delivered and the dream the player was chasing when it ended.
  */
+import { countryCodeToFlagEmojiOrUn } from '@milk-dreams/shared';
+
 export type GameStatus = 'playing' | 'spilled' | 'timeout';
 
 /**
@@ -47,6 +49,13 @@ export interface AllTimeEntry {
   name: string;
   totalMilk: number;
   roundsPlayed: number;
+  /**
+   * ISO 3166-1 alpha-2 country code captured server-side at the
+   * player's last join (Phase 7). `null` when geolocation failed or
+   * the row pre-dates the country column; the HUD renders nothing in
+   * that case.
+   */
+  country: string | null;
 }
 
 export interface Hud {
@@ -77,11 +86,15 @@ export interface Hud {
    * identity reads at a glance from the HUD too. Pass `null` for
    * hue to fall back to the default fg color (used while
    * connecting / offline).
+   * `selfCountry` is an ISO alpha-2 code when the server resolved the
+   * join IP (Phase 7). Only shown in the badge when `status === 'online'`;
+   * pass `null`/`undefined` when unknown.
    */
   setNetStatus(
     status: NetStatus,
     selfName: string | null,
     selfHue?: number | null,
+    selfCountry?: string | null,
   ): void;
   /**
    * Show the round-end scoreboard with the given entries (already
@@ -127,6 +140,7 @@ export function createHud(): Hud {
     '#debug-playtest-hint',
   );
   const netBadge = document.querySelector<HTMLElement>('#net-badge')!;
+  const netBadgeFlag = netBadge.querySelector<HTMLElement>('.net-badge__flag')!;
   const netBadgeText = netBadge.querySelector<HTMLElement>('.net-badge__text')!;
   const scoreboard = document.querySelector<HTMLElement>('#scoreboard')!;
   const scoreboardList =
@@ -148,6 +162,7 @@ export function createHud(): Hud {
   let lastNetStatus: NetStatus | null = null;
   let lastNetName: string | null = null;
   let lastNetHue: number | null = null;
+  let lastNetCountry: string | null = null;
   let lastScoreboardCountdown = -1;
 
   const setBalance: Hud['setBalance'] = (normalizedTilt) => {
@@ -261,18 +276,24 @@ export function createHud(): Hud {
     playtestHint.setAttribute('aria-hidden', visible ? 'false' : 'true');
   };
 
-  const setNetStatus: Hud['setNetStatus'] = (status, selfName, selfHue) => {
+  const setNetStatus: Hud['setNetStatus'] = (status, selfName, selfHue, selfCountry) => {
     const hue = selfHue ?? null;
+    const countryKey =
+      status === 'online' && typeof selfCountry === 'string' && selfCountry.trim()
+        ? selfCountry.trim().toUpperCase()
+        : null;
     if (
       status === lastNetStatus &&
       selfName === lastNetName &&
-      hue === lastNetHue
+      hue === lastNetHue &&
+      countryKey === lastNetCountry
     ) {
       return;
     }
     lastNetStatus = status;
     lastNetName = selfName;
     lastNetHue = hue;
+    lastNetCountry = countryKey;
     netBadge.classList.remove(
       'net-badge--idle',
       'net-badge--connecting',
@@ -295,6 +316,17 @@ export function createHud(): Hud {
       case 'offline':
         netBadgeText.textContent = 'Local';
         break;
+    }
+    // Phase 7 — flag beside the dot when online; real country or UN 🇺🇳
+    // when geoip missed (localhost, etc.).
+    if (status === 'online') {
+      netBadgeFlag.textContent = countryCodeToFlagEmojiOrUn(countryKey);
+      netBadgeFlag.hidden = false;
+      netBadgeFlag.title = countryKey ?? 'Country not detected';
+    } else {
+      netBadgeFlag.textContent = '';
+      netBadgeFlag.hidden = true;
+      netBadgeFlag.removeAttribute('title');
     }
     // Tint the name when we know which hue the server assigned us.
     // Same HSL formula as the in-world tint (see remotePlayers.ts) so
@@ -406,7 +438,17 @@ export function createHud(): Hud {
       // best-effort. If two players sit on the same name (intentional
       // by design — names are spoofable), both rows look "self" — we
       // accept that rather than fingerprinting sessions client-side.
-      name.textContent = e.name + (isSelf ? ' (you)' : '');
+      // Phase 7 — prefix flag; real country or UN when unknown.
+      const flag = countryCodeToFlagEmojiOrUn(e.country);
+      const flagSpan = document.createElement('span');
+      flagSpan.className = 'scoreboard__flag';
+      flagSpan.textContent = flag;
+      flagSpan.title = e.country?.trim() ?? 'Country not detected';
+      flagSpan.setAttribute('aria-hidden', 'true');
+      name.appendChild(flagSpan);
+      name.appendChild(
+        document.createTextNode(e.name + (isSelf ? ' (you)' : '')),
+      );
       li.appendChild(name);
 
       const total = document.createElement('span');

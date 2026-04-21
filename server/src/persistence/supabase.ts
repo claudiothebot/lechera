@@ -7,11 +7,11 @@
  *    no-op store so the rest of the server keeps working unchanged.
  *    Multiplayer never *requires* the leaderboard to be online.
  *  - **Atomic increments via RPC.** Per-name accumulation lives in the
- *    Postgres function `milk_dreams.record_contribution(name, litres)`
- *    so the server doesn't read-modify-write (which would lose updates
- *    under concurrent rounds, e.g. two server instances behind a load
- *    balancer in the future). The schema + function DDL is in the
- *    project's `MULTIPLAYER.md`.
+ *    Postgres function `milk_dreams.record_contribution` (name, litres,
+ *    optional country — Phase 7) so the server doesn't read-modify-write
+ *    (which would lose updates under concurrent rounds, e.g. two server
+ *    instances behind a load balancer in the future). The schema +
+ *    function DDL is in the project's `MULTIPLAYER.md`.
  *
  * The leaderboard read path also goes through a function
  * (`milk_dreams.top_rankings(limit)`) so the table itself stays
@@ -34,6 +34,15 @@ export interface RoundContribution {
   name: string;
   /** Litres delivered THIS ROUND for this player (must be > 0). */
   litres: number;
+  /**
+   * Phase 7 — ISO 3166-1 alpha-2 country code from the player's IP at
+   * join time (`'ES'`, `'US'`, ...) or `null` when geolocation failed
+   * (localhost, private network, VPN range, stale DB miss). The RPC
+   * upserts with `coalesce(excluded.country, rankings.country)` so a
+   * null here KEEPS the previously-stored country for that name — a
+   * one-off geoip miss can't blank a known country.
+   */
+  country?: string | null;
 }
 
 const RPC_TIMEOUT_MS = Number(process.env.SUPABASE_RPC_TIMEOUT_MS ?? 1500);
@@ -159,7 +168,11 @@ export function createLeaderboardStore(): LeaderboardStore {
             `record_contribution(${trimmed})`,
             client.rpc(
               'record_contribution',
-              { p_name: trimmed, p_litres: entry.litres },
+              {
+                p_name: trimmed,
+                p_litres: entry.litres,
+                p_country: entry.country ?? null,
+              },
               { get: false },
             ),
           );

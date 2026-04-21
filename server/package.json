@@ -17,10 +17,12 @@
     "@milk-dreams/shared": "workspace:*",
     "@supabase/supabase-js": "^2.103.3",
     "dotenv": "^17.4.2",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "geoip-lite": "^2.0.1"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
+    "@types/geoip-lite": "^1.4.4",
     "@types/node": "^25.6.0",
     "tsx": "^4.20.6",
     "typescript": "^6.0.3"

@@ -213,6 +213,10 @@ try {
   // ---------------------------------------------------------------
   const reco1 = await joinAs({ name: 'Reco' });
   if (reco1.me.name !== 'Reco') fail('step F: name not set on first join');
+  // Server validates delivery against its tracked pose, not the claim
+  // payload — mirror `smoke-delivery.mjs` (pose first, then claim).
+  reco1.room.send('pose', { x: GOAL_0.x, z: GOAL_0.z, yaw: 0 });
+  await new Promise((r) => setTimeout(r, 100));
   reco1.room.send('claim_delivery', { x: GOAL_0.x, z: GOAL_0.z });
   await new Promise((r) => setTimeout(r, 250));
   if (reco1.me.litresDelivered !== 1) {

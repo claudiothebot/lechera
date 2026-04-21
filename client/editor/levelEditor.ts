@@ -3,29 +3,43 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { createBootstrap } from '../app/bootstrap';
 import { createResize } from '../app/resize';
-import { buildBillboardPlacements, seedManualBillboardsFromProcedural } from '../game/billboardLayout';
+import {
+  buildBillboardPlacements,
+  generateBillboardPlacements,
+} from '../game/billboardLayout';
 import { EXAMPLE_TWEETS } from '../game/exampleTweets';
 import {
   createLevel,
   loadLevelHouses,
   loadLevelTextures,
   loadLevelTrees,
+  loadLevelSceneryProps,
   type Level,
 } from '../game/level';
 import {
-  DEFAULT_LEVEL_PATH,
   defaultLevelDefinition,
+  loadDefaultLevelDefinition,
   loadLevelDefinitionFromUrl,
   parseLevelDefinitionJson,
   serializeLevelDefinition,
 } from '../game/levelLoader';
 import {
   cloneLevelDefinition,
-  type BillboardMode,
-  type BillboardPlacementDefinition,
+  HOUSE_VARIANT_KINDS,
+  resolveHouseVariant,
+  SCENERY_PROP_KINDS,
+  TREE_VARIANT_KINDS,
   type HouseSlotDefinition,
+  type HouseVariantKind,
   type LevelDefinition,
+  type SceneryPropKind,
+  type TreeVariantKind,
 } from '../game/levelDefinition';
+import {
+  ASSET_CATALOG,
+  modeHasAssetCatalog,
+  type AssetCatalogMode,
+} from './assetCatalog';
 import { loadBillboardModel } from '../game/billboardModel';
 import {
   createTweetBillboards,
@@ -34,15 +48,15 @@ import {
 import { installHdriSky } from '../render/sky';
 import { DREAM_GOALS } from '@milk-dreams/shared';
 
-type EditorMode = 'houses' | 'path' | 'paving' | 'boundary' | 'billboards' | 'trees';
-type EditorTransformMode = 'translate' | 'rotate';
+type EditorMode = 'houses' | 'trees' | 'props' | 'billboards' | 'paving' | 'boundary';
 
 type Selection =
   | { kind: 'house'; index: number }
-  | { kind: 'main-path-point'; pointIndex: number }
   | { kind: 'paved-path-point'; pathIndex: number; pointIndex: number }
   | { kind: 'boundary-center' }
   | { kind: 'billboard'; index: number }
+  | { kind: 'tree'; index: number }
+  | { kind: 'prop'; index: number }
   | null;
 
 interface PreviewState {
@@ -51,105 +65,133 @@ interface PreviewState {
 }
 
 interface EditorUi {
-  root: HTMLElement;
   modeSelect: HTMLSelectElement;
-  transformSelect: HTMLSelectElement;
+  modeHint: HTMLElement;
   selectionLabel: HTMLElement;
+  selectionDetails: HTMLElement;
+  addKindField: HTMLElement;
+  addKindSelect: HTMLSelectElement;
   addButton: HTMLButtonElement;
   deleteButton: HTMLButtonElement;
-  resetButton: HTMLButtonElement;
-  rebuildButton: HTMLButtonElement;
-  exportButton: HTMLButtonElement;
-  downloadButton: HTMLButtonElement;
-  importButton: HTMLButtonElement;
-  jsonArea: HTMLTextAreaElement;
+  saveButton: HTMLButtonElement;
+  saveStatus: HTMLElement;
   statusLabel: HTMLElement;
-  boundaryRadiusInput: HTMLInputElement;
-  treeCountInput: HTMLInputElement;
-  treeMinXInput: HTMLInputElement;
-  treeMaxXInput: HTMLInputElement;
-  treeMinZInput: HTMLInputElement;
-  treeMaxZInput: HTMLInputElement;
-  billboardModeSelect: HTMLSelectElement;
-  billboardCountInput: HTMLInputElement;
+  advancedBoundaryRadius: HTMLInputElement;
+  advancedAutoBillboards: HTMLButtonElement;
+  advancedReset: HTMLButtonElement;
+  advancedDownload: HTMLButtonElement;
+  advancedImport: HTMLButtonElement;
+  advancedJson: HTMLTextAreaElement;
 }
 
 const HELPER_HEIGHT_Y = 0.12;
 const BILLBOARD_HELPER_Y = 1.0;
+const DRAFT_STORAGE_KEY = 'milk-dreams/level-editor-draft/level-01';
+
+const MODE_LABELS: Record<EditorMode, string> = {
+  houses: 'Houses',
+  trees: 'Trees',
+  props: 'Props (haystack / cart / well)',
+  billboards: 'Billboards (tweets)',
+  paving: 'Paving path',
+  boundary: 'World boundary',
+};
+
+const MODE_HINTS: Record<EditorMode, string> = {
+  houses: 'Arrows move (snap 0.5 m), ring rotates (snap 15°). Hold Shift for free motion.',
+  trees: 'Arrows move (snap 0.5 m), ring rotates (snap 15°). Hold Shift for free motion.',
+  props: 'Arrows move (snap 0.5 m), ring rotates (snap 15°). Hold Shift for free motion.',
+  billboards: 'Arrows move, ring rotates. Hold Shift for free motion. Tweet index below.',
+  paving:
+    'Drag a paving point to move it (snap 0.5 m). Add inserts a point after the selected one.',
+  boundary:
+    'Drag the centre dot to reposition the world boundary. Radius is in Advanced.',
+};
+
+const ADD_LABELS: Record<EditorMode, string> = {
+  houses: '+ Add house',
+  trees: '+ Add tree',
+  props: '+ Add prop',
+  billboards: '+ Add billboard',
+  paving: '+ Add point',
+  boundary: '',
+};
+
+/**
+ * Resolve the server HTTP base for the dev-only `POST /dev/level` save.
+ * Reuses the same override convention as the game (`?mp=ws://host:port`
+ * or `?save=http://host:port`). Falls back to `http://localhost:2567`.
+ */
+function resolveServerHttpBase(): string {
+  const params = new URLSearchParams(window.location.search);
+  const explicit = params.get('save');
+  if (explicit) return explicit.replace(/\/$/, '');
+  const mp = params.get('mp');
+  if (mp) {
+    if (mp.startsWith('wss://')) return 'https://' + mp.slice('wss://'.length).replace(/\/$/, '');
+    if (mp.startsWith('ws://')) return 'http://' + mp.slice('ws://'.length).replace(/\/$/, '');
+    return mp.replace(/\/$/, '');
+  }
+  return 'http://localhost:2567';
+}
 
 function makeUi(root: HTMLElement): EditorUi {
   root.innerHTML = `
     <div class="level-editor">
       <div class="level-editor__title">Level Editor</div>
-      <div class="level-editor__row">
-        <label class="level-editor__field">
-          <span>Mode</span>
-          <select id="level-editor-mode">
-            <option value="houses">Houses</option>
-            <option value="path">Path</option>
-            <option value="paving">Paving</option>
-            <option value="boundary">Boundary</option>
-            <option value="billboards">Billboards</option>
-            <option value="trees">Trees</option>
-          </select>
-        </label>
-        <label class="level-editor__field">
-          <span>Transform</span>
-          <select id="level-editor-transform">
-            <option value="translate">Translate</option>
-            <option value="rotate">Rotate</option>
-          </select>
-        </label>
+
+      <label class="level-editor__field">
+        <span>What to edit</span>
+        <select id="level-editor-mode">
+          <option value="houses">Houses</option>
+          <option value="trees">Trees</option>
+          <option value="props">Props (haystack / cart / well)</option>
+          <option value="billboards">Billboards (tweets)</option>
+          <option value="paving">Paving path</option>
+          <option value="boundary">World boundary</option>
+        </select>
+      </label>
+      <div id="level-editor-mode-hint" class="level-editor__hint"></div>
+
+      <div class="level-editor__card">
+        <div class="level-editor__card-title">Selection</div>
+        <div id="level-editor-selection" class="level-editor__selection-label">Click an item in the scene</div>
+        <div id="level-editor-selection-details"></div>
       </div>
-      <div id="level-editor-selection" class="level-editor__selection">No selection</div>
-      <div class="level-editor__row">
-        <button id="level-editor-add" type="button">Add</button>
-        <button id="level-editor-delete" type="button">Delete</button>
-        <button id="level-editor-reset" type="button">Reset</button>
-        <button id="level-editor-rebuild" type="button">Rebuild</button>
+
+      <div class="level-editor__add-row">
+        <label id="level-editor-add-kind-field" class="level-editor__field level-editor__add-kind" hidden>
+          <span>Type</span>
+          <select id="level-editor-add-kind"></select>
+        </label>
+        <div class="level-editor__row">
+          <button id="level-editor-add" type="button">+ Add</button>
+          <button id="level-editor-delete" type="button">Delete</button>
+        </div>
       </div>
-      <div class="level-editor__section">
-        <div class="level-editor__section-title">Boundary</div>
+
+      <div class="level-editor__save-bar">
+        <div id="level-editor-save-status" class="level-editor__save-status">All changes saved</div>
+        <button id="level-editor-save" type="button" class="level-editor__save-button">Save to file</button>
+      </div>
+
+      <details class="level-editor__advanced">
+        <summary>Advanced</summary>
         <label class="level-editor__field">
-          <span>Radius</span>
+          <span>World boundary radius (m)</span>
           <input id="level-editor-boundary-radius" type="number" step="0.5" min="1" />
         </label>
-      </div>
-      <div class="level-editor__section">
-        <div class="level-editor__section-title">Trees</div>
-        <div class="level-editor__grid">
-          <label class="level-editor__field"><span>Count</span><input id="level-editor-tree-count" type="number" step="1" min="0" /></label>
-          <label class="level-editor__field"><span>Min X</span><input id="level-editor-tree-minx" type="number" step="0.5" /></label>
-          <label class="level-editor__field"><span>Max X</span><input id="level-editor-tree-maxx" type="number" step="0.5" /></label>
-          <label class="level-editor__field"><span>Min Z</span><input id="level-editor-tree-minz" type="number" step="0.5" /></label>
-          <label class="level-editor__field"><span>Max Z</span><input id="level-editor-tree-maxz" type="number" step="0.5" /></label>
-        </div>
-      </div>
-      <div class="level-editor__section">
-        <div class="level-editor__section-title">Billboards</div>
-        <div class="level-editor__grid">
-          <label class="level-editor__field">
-            <span>Mode</span>
-            <select id="level-editor-billboard-mode">
-              <option value="procedural">Procedural</option>
-              <option value="manual">Manual</option>
-            </select>
-          </label>
-          <label class="level-editor__field">
-            <span>Count</span>
-            <input id="level-editor-billboard-count" type="number" step="1" min="0" />
-          </label>
-        </div>
-      </div>
-      <div class="level-editor__section">
-        <div class="level-editor__section-title">JSON</div>
+        <button id="level-editor-autobillboards" type="button">Auto-generate billboards</button>
         <div class="level-editor__row">
-          <button id="level-editor-export" type="button">Copy JSON</button>
-          <button id="level-editor-download" type="button">Download</button>
-          <button id="level-editor-import" type="button">Import</button>
+          <button id="level-editor-download" type="button">Download JSON</button>
+          <button id="level-editor-import" type="button">Import from textarea</button>
         </div>
-        <textarea id="level-editor-json" spellcheck="false"></textarea>
-      </div>
+        <textarea id="level-editor-json" spellcheck="false" rows="8"></textarea>
+        <button id="level-editor-reset" type="button" class="level-editor__danger">
+          Reset to default layout
+        </button>
+      </details>
+
       <div id="level-editor-status" class="level-editor__status" aria-live="polite"></div>
     </div>
   `;
@@ -161,27 +203,23 @@ function makeUi(root: HTMLElement): EditorUi {
   };
 
   return {
-    root,
     modeSelect: query('#level-editor-mode'),
-    transformSelect: query('#level-editor-transform'),
+    modeHint: query('#level-editor-mode-hint'),
     selectionLabel: query('#level-editor-selection'),
+    selectionDetails: query('#level-editor-selection-details'),
+    addKindField: query('#level-editor-add-kind-field'),
+    addKindSelect: query('#level-editor-add-kind'),
     addButton: query('#level-editor-add'),
     deleteButton: query('#level-editor-delete'),
-    resetButton: query('#level-editor-reset'),
-    rebuildButton: query('#level-editor-rebuild'),
-    exportButton: query('#level-editor-export'),
-    downloadButton: query('#level-editor-download'),
-    importButton: query('#level-editor-import'),
-    jsonArea: query('#level-editor-json'),
+    saveButton: query('#level-editor-save'),
+    saveStatus: query('#level-editor-save-status'),
     statusLabel: query('#level-editor-status'),
-    boundaryRadiusInput: query('#level-editor-boundary-radius'),
-    treeCountInput: query('#level-editor-tree-count'),
-    treeMinXInput: query('#level-editor-tree-minx'),
-    treeMaxXInput: query('#level-editor-tree-maxx'),
-    treeMinZInput: query('#level-editor-tree-minz'),
-    treeMaxZInput: query('#level-editor-tree-maxz'),
-    billboardModeSelect: query('#level-editor-billboard-mode'),
-    billboardCountInput: query('#level-editor-billboard-count'),
+    advancedBoundaryRadius: query('#level-editor-boundary-radius'),
+    advancedAutoBillboards: query('#level-editor-autobillboards'),
+    advancedReset: query('#level-editor-reset'),
+    advancedDownload: query('#level-editor-download'),
+    advancedImport: query('#level-editor-import'),
+    advancedJson: query('#level-editor-json'),
   };
 }
 
@@ -220,37 +258,26 @@ function circleLine(radius: number, color: number): THREE.LineLoop {
   return line;
 }
 
-function boundsRectLine(
-  bounds: LevelDefinition['treeScatter']['bounds'],
-  color: number,
-): THREE.LineLoop {
-  const points = [
-    new THREE.Vector3(bounds.minX, 0, bounds.minZ),
-    new THREE.Vector3(bounds.maxX, 0, bounds.minZ),
-    new THREE.Vector3(bounds.maxX, 0, bounds.maxZ),
-    new THREE.Vector3(bounds.minX, 0, bounds.maxZ),
-  ];
-  const line = new THREE.LineLoop(
-    new THREE.BufferGeometry().setFromPoints(points),
-    new THREE.LineBasicMaterial({ color }),
-  );
-  line.userData.disposeManaged = true;
-  return line;
+function selectionSupportsRotation(selection: Selection): boolean {
+  const k = selection?.kind;
+  return k === 'house' || k === 'billboard' || k === 'tree' || k === 'prop';
 }
 
 function helperLabel(selection: Selection): string {
-  if (!selection) return 'No selection';
+  if (!selection) return 'Click an item in the scene';
   switch (selection.kind) {
     case 'house':
-      return `House ${selection.index + 1}`;
-    case 'main-path-point':
-      return `Main path point ${selection.pointIndex + 1}`;
+      return `House #${selection.index + 1}`;
     case 'paved-path-point':
-      return `Paving ${selection.pathIndex + 1}, point ${selection.pointIndex + 1}`;
+      return `Paving path ${selection.pathIndex + 1} — point ${selection.pointIndex + 1}`;
     case 'boundary-center':
-      return 'World boundary center';
+      return 'World boundary centre';
     case 'billboard':
-      return `Billboard ${selection.index + 1}`;
+      return `Billboard #${selection.index + 1}`;
+    case 'tree':
+      return `Tree #${selection.index + 1}`;
+    case 'prop':
+      return `Prop #${selection.index + 1}`;
   }
 }
 
@@ -265,13 +292,18 @@ function clampHelperObject(selection: Selection, object: THREE.Object3D, definit
       break;
     }
     case 'boundary-center':
-    case 'main-path-point':
     case 'paved-path-point':
       object.position.y = HELPER_HEIGHT_Y;
       object.rotation.set(0, 0, 0);
       break;
     case 'billboard':
       object.position.y = BILLBOARD_HELPER_Y;
+      object.rotation.x = 0;
+      object.rotation.z = 0;
+      break;
+    case 'tree':
+    case 'prop':
+      object.position.y = HELPER_HEIGHT_Y;
       object.rotation.x = 0;
       object.rotation.z = 0;
       break;
@@ -283,11 +315,9 @@ function clampHelperObject(selection: Selection, object: THREE.Object3D, definit
 async function loadInitialDefinition(): Promise<LevelDefinition> {
   const params = new URLSearchParams(window.location.search);
   const explicitUrl = params.get('level');
-  if (explicitUrl) {
-    return loadLevelDefinitionFromUrl(explicitUrl);
-  }
+  if (explicitUrl) return loadLevelDefinitionFromUrl(explicitUrl);
   try {
-    return await loadLevelDefinitionFromUrl(DEFAULT_LEVEL_PATH);
+    return await loadDefaultLevelDefinition();
   } catch {
     return defaultLevelDefinition();
   }
@@ -338,17 +368,75 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
   orbit.minDistance = 8;
   orbit.maxDistance = 140;
 
-  const transform = new TransformControls(camera, renderer.domElement);
-  transform.setSpace('world');
-  scene.add(transform.getHelper());
+  // Editor is strictly top-down 2.5D. Three's `TransformControls` can only
+  // show one gizmo mode at a time, so we use TWO instances attached to the
+  // same object simultaneously:
+  //   - `transformMove`: translate on XZ (arrows on the ground plane).
+  //   - `transformRotate`: rotate around Y (the yaw ring above the object).
+  // Making the ring noticeably larger than the arrows avoids pick ambiguity
+  // when the cursor hovers near the centre. This replaces the old Move /
+  // Rotate toggle where authors had to swap modes to rotate.
+  // Snap steps for both gizmos and the rotate buttons below. Authors can
+  // temporarily disable the snap by holding Shift while dragging — this is
+  // a built-in behaviour of `TransformControls` once a snap value is set.
+  // Kept out of the UI as constants so all rotation paths (ring + buttons)
+  // agree on the same step size.
+  const ROTATION_SNAP_RAD = THREE.MathUtils.degToRad(15);
+  const TRANSLATION_SNAP_M = 0.5;
+
+  const transformMove = new TransformControls(camera, renderer.domElement);
+  transformMove.setSpace('world');
+  transformMove.setMode('translate');
+  transformMove.setTranslationSnap(TRANSLATION_SNAP_M);
+  transformMove.showX = true;
+  transformMove.showY = false;
+  transformMove.showZ = true;
+  scene.add(transformMove.getHelper());
+
+  const transformRotate = new TransformControls(camera, renderer.domElement);
+  transformRotate.setSpace('world');
+  transformRotate.setMode('rotate');
+  transformRotate.setRotationSnap(ROTATION_SNAP_RAD);
+  transformRotate.showX = false;
+  transformRotate.showY = true;
+  transformRotate.showZ = false;
+  transformRotate.size = 1.35;
+  scene.add(transformRotate.getHelper());
+
+  /** The mesh the two gizmos are currently attached to, for the shared
+   *  "read transform back into the definition" helper. `null` when nothing
+   *  is selected. */
+  let attachedMesh: THREE.Object3D | null = null;
 
   const helpersGroup = new THREE.Group();
   helpersGroup.name = 'level-editor-helpers';
   scene.add(helpersGroup);
 
-  let definition = await loadInitialDefinition();
+  const serverLoaded = await loadInitialDefinition();
+  let definition = cloneLevelDefinition(serverLoaded);
+  /** Baseline we compare against to know if the editor has unsaved changes. */
+  let savedSerialized = serializeLevelDefinition(serverLoaded);
+
+  // Silently restore a local draft if it differs from what the server
+  // served us. No modal / banner — the "Unsaved changes" indicator on
+  // the Save bar is the only signal. Authors who want to throw the
+  // draft away use "Reset to default layout" in Advanced, then Save.
+  try {
+    const rawDraft = localStorage.getItem(DRAFT_STORAGE_KEY);
+    if (rawDraft) {
+      const draft = parseLevelDefinitionJson(rawDraft);
+      if (serializeLevelDefinition(draft) !== savedSerialized) {
+        definition = draft;
+      } else {
+        localStorage.removeItem(DRAFT_STORAGE_KEY);
+      }
+    }
+  } catch (err) {
+    console.warn('[editor] ignored invalid draft in localStorage', err);
+    localStorage.removeItem(DRAFT_STORAGE_KEY);
+  }
+
   let currentMode: EditorMode = 'houses';
-  let currentTransformMode: EditorTransformMode = 'translate';
   let selected: Selection = null;
   let selectableMeshes: THREE.Mesh[] = [];
   let preview: PreviewState | null = null;
@@ -361,59 +449,80 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
     ui.statusLabel.textContent = text;
   }
 
-  function syncFieldsFromDefinition() {
-    ui.boundaryRadiusInput.value = String(definition.worldBoundary.radius);
-    ui.treeCountInput.value = String(definition.treeScatter.count);
-    ui.treeMinXInput.value = String(definition.treeScatter.bounds.minX);
-    ui.treeMaxXInput.value = String(definition.treeScatter.bounds.maxX);
-    ui.treeMinZInput.value = String(definition.treeScatter.bounds.minZ);
-    ui.treeMaxZInput.value = String(definition.treeScatter.bounds.maxZ);
-    ui.billboardModeSelect.value = definition.billboards.mode;
-    ui.billboardCountInput.value = String(definition.billboards.count);
-    ui.jsonArea.value = serializeLevelDefinition(definition);
+  function isDirty(): boolean {
+    return serializeLevelDefinition(definition) !== savedSerialized;
   }
 
-  function updateTransformMode() {
-    const selectionKind = selected?.kind;
-    const canRotate = selectionKind === 'house' || selectionKind === 'billboard';
-    const nextMode = canRotate ? currentTransformMode : 'translate';
-    transform.setMode(nextMode);
-    transform.showX = true;
-    transform.showY = false;
-    transform.showZ = true;
-    if (nextMode === 'rotate') {
-      transform.showX = false;
-      transform.showZ = false;
-      transform.showY = true;
+  function updateSaveBar() {
+    const dirty = isDirty();
+    ui.saveStatus.textContent = dirty ? '• Unsaved changes' : 'All changes saved';
+    ui.saveStatus.classList.toggle('level-editor__save-status--dirty', dirty);
+    ui.saveButton.disabled = !dirty;
+  }
+
+  function persistDraft() {
+    try {
+      if (isDirty()) {
+        localStorage.setItem(DRAFT_STORAGE_KEY, serializeLevelDefinition(definition));
+      } else {
+        localStorage.removeItem(DRAFT_STORAGE_KEY);
+      }
+    } catch (err) {
+      console.warn('[editor] failed to persist draft', err);
     }
+  }
+
+  function syncFieldsFromDefinition() {
+    ui.advancedBoundaryRadius.value = String(definition.worldBoundary.radius);
+    ui.advancedJson.value = serializeLevelDefinition(definition);
+    persistDraft();
+    updateSaveBar();
   }
 
   function select(selection: Selection, object?: THREE.Object3D) {
     selected = selection;
     ui.selectionLabel.textContent = helperLabel(selection);
     if (selection && object) {
-      transform.attach(object);
+      attachedMesh = object;
+      transformMove.attach(object);
+      if (selectionSupportsRotation(selection)) transformRotate.attach(object);
+      else transformRotate.detach();
     } else {
-      transform.detach();
+      attachedMesh = null;
+      transformMove.detach();
+      transformRotate.detach();
     }
-    updateTransformMode();
     updateActionButtons();
+    renderSelectionDetails();
   }
 
-  function helperColor(selectedState: boolean, base: number): THREE.ColorRepresentation {
+  function helperColor(selectedState: boolean, base: number): number {
     return selectedState ? 0xffd166 : base;
   }
 
   function clearHelpers() {
-    disposeObjectTree(helpersGroup);
-    scene.add(helpersGroup);
+    // Dispose GPU resources for every child, then actually detach them from
+    // the group. The previous implementation only called `disposeObjectTree`
+    // on the group itself, which freed geometry/material memory but left
+    // the mesh objects dangling inside `helpersGroup.children` — so the
+    // old yellow house boxes kept rendering after switching modes.
+    for (const child of helpersGroup.children) {
+      const mesh = child as THREE.Mesh;
+      mesh.geometry?.dispose?.();
+      const material = (mesh as { material?: THREE.Material | THREE.Material[] }).material;
+      if (Array.isArray(material)) material.forEach(disposeMaterial);
+      else if (material) disposeMaterial(material);
+    }
+    helpersGroup.clear();
     selectableMeshes = [];
   }
 
   function makePointHelper(position: THREE.Vector3, color: number, selectionData: Selection) {
     const mesh = new THREE.Mesh(
       new THREE.SphereGeometry(0.45, 18, 14),
-      new THREE.MeshBasicMaterial({ color: helperColor(selected === selectionData ? true : false, color) }),
+      new THREE.MeshBasicMaterial({
+        color: helperColor(selected === selectionData ? true : false, color),
+      }),
     );
     mesh.position.copy(position);
     mesh.userData.disposeManaged = true;
@@ -440,21 +549,35 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
     helpersGroup.add(mesh);
   }
 
+  function makeCylinderHelper(
+    position: THREE.Vector3,
+    yaw: number,
+    color: number,
+    selection: Selection,
+  ) {
+    const mesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.6, 0.6, 1.2, 18),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.85,
+      }),
+    );
+    mesh.position.copy(position);
+    mesh.rotation.y = yaw;
+    mesh.userData.disposeManaged = true;
+    mesh.userData.selection = selection;
+    selectableMeshes.push(mesh);
+    helpersGroup.add(mesh);
+    return mesh;
+  }
+
   function rebuildHelpers() {
     clearHelpers();
 
     switch (currentMode) {
       case 'houses':
         definition.houseSlots.forEach((slot, index) => makeHouseHelper(slot, index));
-        break;
-      case 'path':
-        definition.mainPath.waypoints.forEach((wp, pointIndex) => {
-          makePointHelper(
-            new THREE.Vector3(wp.x, HELPER_HEIGHT_Y, wp.z),
-            0xef476f,
-            { kind: 'main-path-point', pointIndex },
-          );
-        });
         break;
       case 'paving':
         definition.pavedPaths.forEach((path, pathIndex) => {
@@ -476,33 +599,57 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
         );
         makePointHelper(center, 0xffd166, { kind: 'boundary-center' });
         const ring = circleLine(definition.worldBoundary.radius, 0xffd166);
-        ring.position.set(definition.worldBoundary.centerX, HELPER_HEIGHT_Y * 0.5, definition.worldBoundary.centerZ);
+        ring.position.set(
+          definition.worldBoundary.centerX,
+          HELPER_HEIGHT_Y * 0.5,
+          definition.worldBoundary.centerZ,
+        );
         helpersGroup.add(ring);
         break;
       }
       case 'billboards': {
-        if (definition.billboards.mode === 'manual') {
-          definition.billboards.placements.forEach((placement, index) => {
-            const mesh = new THREE.Mesh(
-              new THREE.BoxGeometry(1.6, 1.6, 0.18),
-              new THREE.MeshBasicMaterial({
-                color: helperColor(selected?.kind === 'billboard' && selected.index === index, 0xf28482),
-              }),
-            );
-            mesh.position.set(placement.x, BILLBOARD_HELPER_Y, placement.z);
-            mesh.rotation.y = placement.yaw;
-            mesh.userData.disposeManaged = true;
-            mesh.userData.selection = { kind: 'billboard', index } satisfies Selection;
-            selectableMeshes.push(mesh);
-            helpersGroup.add(mesh);
-          });
-        }
+        definition.billboards.forEach((placement, index) => {
+          const color = helperColor(
+            selected?.kind === 'billboard' && selected.index === index,
+            0xf28482,
+          );
+          const mesh = new THREE.Mesh(
+            new THREE.BoxGeometry(1.6, 1.6, 0.18),
+            new THREE.MeshBasicMaterial({ color }),
+          );
+          mesh.position.set(placement.x, BILLBOARD_HELPER_Y, placement.z);
+          mesh.rotation.y = placement.yaw;
+          mesh.userData.disposeManaged = true;
+          mesh.userData.selection = { kind: 'billboard', index } satisfies Selection;
+          selectableMeshes.push(mesh);
+          helpersGroup.add(mesh);
+        });
         break;
       }
       case 'trees': {
-        const rect = boundsRectLine(definition.treeScatter.bounds, 0x90be6d);
-        rect.position.y = HELPER_HEIGHT_Y * 0.5;
-        helpersGroup.add(rect);
+        definition.trees.forEach((t, index) => {
+          const color = helperColor(
+            selected?.kind === 'tree' && selected.index === index,
+            0x90be6d,
+          );
+          makeCylinderHelper(new THREE.Vector3(t.x, 0.6, t.z), t.yaw, color, {
+            kind: 'tree',
+            index,
+          });
+        });
+        break;
+      }
+      case 'props': {
+        definition.sceneryProps.forEach((p, index) => {
+          const color = helperColor(
+            selected?.kind === 'prop' && selected.index === index,
+            0xf4a261,
+          );
+          makeCylinderHelper(new THREE.Vector3(p.x, 0.6, p.z), p.yaw, color, {
+            kind: 'prop',
+            index,
+          });
+        });
         break;
       }
     }
@@ -519,42 +666,203 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
     }
   }
 
-  function updateDefinitionFromAttachedObject() {
-    if (!selected || !transform.object) return;
-    clampHelperObject(selected, transform.object, definition);
+  /**
+   * Build a labelled `<select>` row backed by an options list. Shared by
+   * every "pick a variant / kind" control so the editor stays consistent
+   * regardless of asset category.
+   */
+  function appendSelectRow(
+    label: string,
+    options: ReadonlyArray<{ id: string; label: string }>,
+    currentId: string,
+    onChange: (id: string) => void,
+  ) {
+    const row = document.createElement('label');
+    row.className = 'level-editor__field';
+    const labelEl = document.createElement('span');
+    labelEl.textContent = label;
+    row.appendChild(labelEl);
+    const sel = document.createElement('select');
+    for (const opt of options) {
+      const o = document.createElement('option');
+      o.value = opt.id;
+      o.textContent = opt.label;
+      if (opt.id === currentId) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.addEventListener('change', () => onChange(sel.value));
+    row.appendChild(sel);
+    ui.selectionDetails.appendChild(row);
+  }
+
+  /**
+   * Append a row of 4 rotate-step buttons (↺90° / −15° / +15° / 90°↻).
+   * Matches the 15° rotation snap on the gizmo ring so clicking a button
+   * and dragging the ring both land on the same grid of angles.
+   */
+  function appendRotationButtons(getYaw: () => number, setYaw: (rad: number) => void) {
+    const row = document.createElement('div');
+    row.className = 'level-editor__field';
+    const labelEl = document.createElement('span');
+    labelEl.textContent = 'Rotate';
+    row.appendChild(labelEl);
+
+    const group = document.createElement('div');
+    group.className = 'level-editor__rotate-buttons';
+
+    const mk = (deltaDeg: number, label: string) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = label;
+      btn.className = 'level-editor__rotate-button';
+      btn.title = `Rotate ${deltaDeg > 0 ? '+' : ''}${deltaDeg}°`;
+      btn.addEventListener('click', () => {
+        setYaw(getYaw() + (deltaDeg * Math.PI) / 180);
+        syncFieldsFromDefinition();
+        rebuildHelpers();
+        void requestPreviewBuild();
+      });
+      group.appendChild(btn);
+    };
+    mk(-90, '↺ 90°');
+    mk(-15, '−15°');
+    mk(15, '+15°');
+    mk(90, '90° ↻');
+
+    row.appendChild(group);
+    ui.selectionDetails.appendChild(row);
+  }
+
+  function renderSelectionDetails() {
+    ui.selectionDetails.innerHTML = '';
+    if (!selected) return;
     switch (selected.kind) {
       case 'house': {
         const slot = definition.houseSlots[selected.index];
         if (!slot) return;
-        slot.x = transform.object.position.x;
-        slot.z = transform.object.position.z;
-        slot.yaw = transform.object.rotation.y;
+        const current = resolveHouseVariant(slot, selected.index);
+        appendSelectRow('Variant', ASSET_CATALOG.houses, current, (id) => {
+          slot.variant = id as HouseVariantKind;
+          syncFieldsFromDefinition();
+          void requestPreviewBuild();
+        });
+        appendRotationButtons(
+          () => slot.yaw,
+          (rad) => {
+            slot.yaw = rad;
+          },
+        );
         break;
       }
-      case 'main-path-point': {
-        const point = definition.mainPath.waypoints[selected.pointIndex];
-        if (!point) return;
-        point.x = transform.object.position.x;
-        point.z = transform.object.position.z;
+      case 'tree': {
+        const placement = definition.trees[selected.index];
+        if (!placement) return;
+        appendSelectRow('Variant', ASSET_CATALOG.trees, placement.variant, (id) => {
+          placement.variant = id as TreeVariantKind;
+          syncFieldsFromDefinition();
+          void requestPreviewBuild();
+        });
+        appendRotationButtons(
+          () => placement.yaw,
+          (rad) => {
+            placement.yaw = rad;
+          },
+        );
+        break;
+      }
+      case 'prop': {
+        const placement = definition.sceneryProps[selected.index];
+        if (!placement) return;
+        appendSelectRow('Kind', ASSET_CATALOG.props, placement.kind, (id) => {
+          placement.kind = id as SceneryPropKind;
+          syncFieldsFromDefinition();
+          void requestPreviewBuild();
+        });
+        appendRotationButtons(
+          () => placement.yaw,
+          (rad) => {
+            placement.yaw = rad;
+          },
+        );
+        break;
+      }
+      case 'billboard': {
+        const placement = definition.billboards[selected.index];
+        if (!placement) return;
+        const row = document.createElement('label');
+        row.className = 'level-editor__field';
+        row.innerHTML = `<span>Tweet index</span>`;
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0';
+        input.step = '1';
+        input.value = String(placement.tweetIndex ?? selected.index);
+        input.addEventListener('change', () => {
+          const next = Math.max(0, Math.round(Number(input.value) || 0));
+          placement.tweetIndex = next;
+          syncFieldsFromDefinition();
+          void requestPreviewBuild();
+        });
+        row.appendChild(input);
+        ui.selectionDetails.appendChild(row);
+        appendRotationButtons(
+          () => placement.yaw,
+          (rad) => {
+            placement.yaw = rad;
+          },
+        );
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  function updateDefinitionFromAttachedObject() {
+    if (!selected || !attachedMesh) return;
+    clampHelperObject(selected, attachedMesh, definition);
+    switch (selected.kind) {
+      case 'house': {
+        const slot = definition.houseSlots[selected.index];
+        if (!slot) return;
+        slot.x = attachedMesh.position.x;
+        slot.z = attachedMesh.position.z;
+        slot.yaw = attachedMesh.rotation.y;
         break;
       }
       case 'paved-path-point': {
         const point = definition.pavedPaths[selected.pathIndex]?.waypoints[selected.pointIndex];
         if (!point) return;
-        point.x = transform.object.position.x;
-        point.z = transform.object.position.z;
+        point.x = attachedMesh.position.x;
+        point.z = attachedMesh.position.z;
         break;
       }
       case 'boundary-center':
-        definition.worldBoundary.centerX = transform.object.position.x;
-        definition.worldBoundary.centerZ = transform.object.position.z;
+        definition.worldBoundary.centerX = attachedMesh.position.x;
+        definition.worldBoundary.centerZ = attachedMesh.position.z;
         break;
       case 'billboard': {
-        const placement = definition.billboards.placements[selected.index];
+        const placement = definition.billboards[selected.index];
         if (!placement) return;
-        placement.x = transform.object.position.x;
-        placement.z = transform.object.position.z;
-        placement.yaw = transform.object.rotation.y;
+        placement.x = attachedMesh.position.x;
+        placement.z = attachedMesh.position.z;
+        placement.yaw = attachedMesh.rotation.y;
+        break;
+      }
+      case 'tree': {
+        const placement = definition.trees[selected.index];
+        if (!placement) return;
+        placement.x = attachedMesh.position.x;
+        placement.z = attachedMesh.position.z;
+        placement.yaw = attachedMesh.rotation.y;
+        break;
+      }
+      case 'prop': {
+        const placement = definition.sceneryProps[selected.index];
+        if (!placement) return;
+        placement.x = attachedMesh.position.x;
+        placement.z = attachedMesh.position.z;
+        placement.yaw = attachedMesh.rotation.y;
         break;
       }
     }
@@ -572,6 +880,7 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
     await loadLevelTextures(level, renderer);
     await loadLevelHouses(level);
     await loadLevelTrees(level, DREAM_GOALS);
+    await loadLevelSceneryProps(level);
     scene.add(level.group);
     const billboardModel = await billboardModelPromise;
     const placements = buildBillboardPlacements(
@@ -600,7 +909,6 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
     while (true) {
       const targetId = buildRequestId;
       const snapshot = cloneLevelDefinition(definition);
-      setStatus('Building preview…');
       let nextPreview: PreviewState | null = null;
       try {
         nextPreview = await buildPreview(snapshot);
@@ -620,31 +928,56 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
       const oldPreview = preview;
       preview = nextPreview;
       await disposePreview(oldPreview);
-      setStatus('Preview ready');
       break;
     }
 
     buildInFlight = false;
   }
 
+  /**
+   * Rebuild the "Type" dropdown next to the Add button to match the
+   * catalog for the current mode. Hidden for modes without a catalog
+   * (paving, boundary, billboards).
+   */
+  function refreshAddKindPicker() {
+    const hasCatalog = modeHasAssetCatalog(currentMode);
+    ui.addKindField.hidden = !hasCatalog;
+    if (!hasCatalog) {
+      ui.addKindSelect.innerHTML = '';
+      return;
+    }
+    const options = ASSET_CATALOG[currentMode as AssetCatalogMode];
+    const previous = ui.addKindSelect.value;
+    ui.addKindSelect.innerHTML = '';
+    for (const opt of options) {
+      const o = document.createElement('option');
+      o.value = opt.id;
+      o.textContent = opt.label;
+      ui.addKindSelect.appendChild(o);
+    }
+    const match = options.find((o) => o.id === previous);
+    ui.addKindSelect.value = match ? previous : (options[0]?.id ?? '');
+  }
+
   function updateActionButtons() {
-    const canAddPoint =
-      currentMode === 'houses' ||
-      currentMode === 'path' ||
-      currentMode === 'paving' ||
-      currentMode === 'billboards';
+    const modeCanAdd = currentMode !== 'boundary';
     const canDelete =
       selected?.kind === 'house' ||
-      selected?.kind === 'main-path-point' ||
       selected?.kind === 'paved-path-point' ||
-      selected?.kind === 'billboard';
-    ui.addButton.disabled = !canAddPoint;
+      selected?.kind === 'billboard' ||
+      selected?.kind === 'tree' ||
+      selected?.kind === 'prop';
+    ui.addButton.disabled = !modeCanAdd;
+    ui.addButton.textContent = ADD_LABELS[currentMode] || '+ Add';
     ui.deleteButton.disabled = !canDelete;
+    refreshAddKindPicker();
   }
 
   function applyAddAction() {
+    let nextSelection: Selection = null;
     switch (currentMode) {
-      case 'houses':
+      case 'houses': {
+        const variant = (ui.addKindSelect.value || HOUSE_VARIANT_KINDS[0]) as HouseVariantKind;
         definition.houseSlots.push({
           x: 0,
           z: 0,
@@ -652,46 +985,52 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
           halfX: 1.2,
           halfZ: 1.2,
           halfY: 1.0,
+          variant,
         });
-        break;
-      case 'path': {
-        const points = definition.mainPath.waypoints;
-        const index = selected?.kind === 'main-path-point' ? selected.pointIndex + 1 : points.length;
-        const prev = points[Math.max(0, index - 1)]!;
-        const next = points[Math.min(points.length - 1, index)] ?? prev;
-        points.splice(index, 0, {
-          x: (prev.x + next.x) * 0.5 + 1,
-          z: (prev.z + next.z) * 0.5,
-        });
+        nextSelection = { kind: 'house', index: definition.houseSlots.length - 1 };
         break;
       }
       case 'paving': {
         const pathIndex = selected?.kind === 'paved-path-point' ? selected.pathIndex : 0;
         const path = definition.pavedPaths[pathIndex];
         if (!path) break;
-        const index = selected?.kind === 'paved-path-point' ? selected.pointIndex + 1 : path.waypoints.length;
+        const index =
+          selected?.kind === 'paved-path-point' ? selected.pointIndex + 1 : path.waypoints.length;
         const prev = path.waypoints[Math.max(0, index - 1)]!;
         const next = path.waypoints[Math.min(path.waypoints.length - 1, index)] ?? prev;
         path.waypoints.splice(index, 0, {
           x: (prev.x + next.x) * 0.5 + 1,
           z: (prev.z + next.z) * 0.5,
         });
+        nextSelection = { kind: 'paved-path-point', pathIndex, pointIndex: index };
         break;
       }
-      case 'billboards': {
-        if (definition.billboards.mode !== 'manual') break;
-        definition.billboards.placements.push({
+      case 'billboards':
+        definition.billboards.push({
           x: 0,
           z: 0,
           yaw: 0,
-          tweetIndex: definition.billboards.placements.length % EXAMPLE_TWEETS.length,
+          tweetIndex: definition.billboards.length % EXAMPLE_TWEETS.length,
         });
+        nextSelection = { kind: 'billboard', index: definition.billboards.length - 1 };
+        break;
+      case 'trees': {
+        const variant = (ui.addKindSelect.value || TREE_VARIANT_KINDS[0]) as TreeVariantKind;
+        definition.trees.push({ x: 0, z: 0, yaw: 0, variant });
+        nextSelection = { kind: 'tree', index: definition.trees.length - 1 };
+        break;
+      }
+      case 'props': {
+        const kind = (ui.addKindSelect.value || SCENERY_PROP_KINDS[0]) as SceneryPropKind;
+        definition.sceneryProps.push({ kind, x: 0, z: 0, yaw: 0 });
+        nextSelection = { kind: 'prop', index: definition.sceneryProps.length - 1 };
         break;
       }
       default:
         break;
     }
     syncFieldsFromDefinition();
+    selected = nextSelection;
     rebuildHelpers();
     void requestPreviewBuild();
   }
@@ -702,11 +1041,6 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
       case 'house':
         definition.houseSlots.splice(selected.index, 1);
         break;
-      case 'main-path-point':
-        if (definition.mainPath.waypoints.length > 2) {
-          definition.mainPath.waypoints.splice(selected.pointIndex, 1);
-        }
-        break;
       case 'paved-path-point': {
         const path = definition.pavedPaths[selected.pathIndex];
         if (path && path.waypoints.length > 2) {
@@ -715,7 +1049,13 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
         break;
       }
       case 'billboard':
-        definition.billboards.placements.splice(selected.index, 1);
+        definition.billboards.splice(selected.index, 1);
+        break;
+      case 'tree':
+        definition.trees.splice(selected.index, 1);
+        break;
+      case 'prop':
+        definition.sceneryProps.splice(selected.index, 1);
         break;
       default:
         return;
@@ -726,80 +1066,88 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
     void requestPreviewBuild();
   }
 
-  function setBillboardMode(mode: BillboardMode) {
-    definition.billboards.mode = mode;
-    if (mode === 'manual' && definition.billboards.placements.length === 0 && preview) {
-      definition.billboards.placements = seedManualBillboardsFromProcedural(
-        definition,
-        preview.level.obstacles,
-        DREAM_GOALS,
-        EXAMPLE_TWEETS,
-        { x: preview.level.spawn.x, z: preview.level.spawn.z },
-      );
+  function autoGenerateBillboards() {
+    if (!preview) {
+      setStatus('Preview not ready yet — wait a second and retry.');
+      return;
     }
+    definition.billboards = generateBillboardPlacements(
+      definition,
+      preview.level.obstacles,
+      DREAM_GOALS,
+      EXAMPLE_TWEETS,
+      { x: preview.level.spawn.x, z: preview.level.spawn.z },
+    );
     syncFieldsFromDefinition();
     rebuildHelpers();
     void requestPreviewBuild();
   }
 
+  async function saveToServer() {
+    if (!isDirty()) return;
+    const body = serializeLevelDefinition(definition);
+    const endpoint = `${resolveServerHttpBase()}/dev/level`;
+    setStatus('Saving…');
+    ui.saveButton.disabled = true;
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`${res.status} ${res.statusText} ${text}`);
+      }
+      savedSerialized = body;
+      localStorage.removeItem(DRAFT_STORAGE_KEY);
+      updateSaveBar();
+      setStatus('Saved to public/levels/level-01.json');
+    } catch (err) {
+      console.error('[editor] save failed', err);
+      setStatus(
+        `Save failed — is the dev server running on ${resolveServerHttpBase()}? See console.`,
+      );
+      updateSaveBar();
+    }
+  }
+
+  function updateModeHint() {
+    ui.modeHint.textContent = MODE_HINTS[currentMode];
+    ui.modeSelect.title = MODE_LABELS[currentMode];
+  }
+
   ui.modeSelect.addEventListener('change', () => {
     currentMode = ui.modeSelect.value as EditorMode;
+    updateModeHint();
     rebuildHelpers();
-  });
-  ui.transformSelect.addEventListener('change', () => {
-    currentTransformMode = ui.transformSelect.value as EditorTransformMode;
-    updateTransformMode();
+    updateActionButtons();
   });
   ui.addButton.addEventListener('click', applyAddAction);
   ui.deleteButton.addEventListener('click', applyDeleteAction);
-  ui.resetButton.addEventListener('click', () => {
+  ui.saveButton.addEventListener('click', () => {
+    void saveToServer();
+  });
+  ui.advancedAutoBillboards.addEventListener('click', autoGenerateBillboards);
+  ui.advancedReset.addEventListener('click', () => {
+    if (!confirm('Reset the level to the built-in default layout? Unsaved edits will be lost.')) {
+      return;
+    }
     definition = defaultLevelDefinition();
     syncFieldsFromDefinition();
     rebuildHelpers();
     void requestPreviewBuild();
   });
-  ui.rebuildButton.addEventListener('click', () => {
-    void requestPreviewBuild();
-  });
-  ui.boundaryRadiusInput.addEventListener('change', () => {
-    definition.worldBoundary.radius = Math.max(1, Number(ui.boundaryRadiusInput.value) || 1);
+  ui.advancedBoundaryRadius.addEventListener('change', () => {
+    definition.worldBoundary.radius = Math.max(
+      1,
+      Number(ui.advancedBoundaryRadius.value) || 1,
+    );
     syncFieldsFromDefinition();
     rebuildHelpers();
     void requestPreviewBuild();
   });
-  for (const [input, setter] of [
-    [ui.treeCountInput, (v: number) => (definition.treeScatter.count = Math.max(0, Math.round(v)))],
-    [ui.treeMinXInput, (v: number) => (definition.treeScatter.bounds.minX = v)],
-    [ui.treeMaxXInput, (v: number) => (definition.treeScatter.bounds.maxX = v)],
-    [ui.treeMinZInput, (v: number) => (definition.treeScatter.bounds.minZ = v)],
-    [ui.treeMaxZInput, (v: number) => (definition.treeScatter.bounds.maxZ = v)],
-  ] as const) {
-    input.addEventListener('change', () => {
-      setter(Number(input.value) || 0);
-      syncFieldsFromDefinition();
-      rebuildHelpers();
-      void requestPreviewBuild();
-    });
-  }
-  ui.billboardModeSelect.addEventListener('change', () => {
-    setBillboardMode(ui.billboardModeSelect.value as BillboardMode);
-  });
-  ui.billboardCountInput.addEventListener('change', () => {
-    definition.billboards.count = Math.max(0, Math.round(Number(ui.billboardCountInput.value) || 0));
-    syncFieldsFromDefinition();
-    void requestPreviewBuild();
-  });
-  ui.exportButton.addEventListener('click', async () => {
-    const text = serializeLevelDefinition(definition);
-    ui.jsonArea.value = text;
-    try {
-      await navigator.clipboard.writeText(text);
-      setStatus('JSON copied to clipboard');
-    } catch {
-      setStatus('JSON prepared in the textarea');
-    }
-  });
-  ui.downloadButton.addEventListener('click', () => {
+  ui.advancedDownload.addEventListener('click', () => {
     const blob = new Blob([serializeLevelDefinition(definition)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -809,33 +1157,44 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
     URL.revokeObjectURL(url);
     setStatus('Downloaded level JSON');
   });
-  ui.importButton.addEventListener('click', () => {
+  ui.advancedImport.addEventListener('click', () => {
     try {
-      definition = parseLevelDefinitionJson(ui.jsonArea.value);
+      definition = parseLevelDefinitionJson(ui.advancedJson.value);
       syncFieldsFromDefinition();
       rebuildHelpers();
       void requestPreviewBuild();
-      setStatus('Imported JSON');
+      setStatus('Imported JSON from textarea');
     } catch (err) {
       console.error('[editor] invalid JSON import', err);
       setStatus('Import failed. Check the JSON and try again.');
     }
   });
 
-  transform.addEventListener('dragging-changed', (event) => {
+  // Both translate and rotate gizmos share the same handlers: live-update
+  // the definition on `objectChange`, and on drag-end commit (rebuild helpers
+  // + rebuild preview). We also gate OrbitControls on the combined drag
+  // state so the camera doesn't pan while the user is rotating.
+  let dragCount = 0;
+  const onDraggingChanged = (event: { value: unknown }) => {
     const dragging = event.value === true;
-    orbit.enabled = !dragging;
-    if (!dragging) {
+    dragCount += dragging ? 1 : -1;
+    if (dragCount < 0) dragCount = 0;
+    orbit.enabled = dragCount === 0;
+    if (!dragging && dragCount === 0) {
       updateDefinitionFromAttachedObject();
       syncFieldsFromDefinition();
       rebuildHelpers();
       void requestPreviewBuild();
     }
-  });
-  transform.addEventListener('objectChange', () => {
+  };
+  const onObjectChange = () => {
     updateDefinitionFromAttachedObject();
     syncFieldsFromDefinition();
-  });
+  };
+  transformMove.addEventListener('dragging-changed', onDraggingChanged);
+  transformMove.addEventListener('objectChange', onObjectChange);
+  transformRotate.addEventListener('dragging-changed', onDraggingChanged);
+  transformRotate.addEventListener('objectChange', onObjectChange);
 
   const raycaster = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
@@ -860,13 +1219,15 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
     select(hit.object.userData.selection as Selection, hit.object);
   });
 
+  updateModeHint();
   syncFieldsFromDefinition();
   rebuildHelpers();
+  updateActionButtons();
   await requestPreviewBuild();
 
   const loadingEl = document.getElementById('loading-screen');
   loadingEl?.classList.add('hidden');
-  setStatus('Editor ready');
+  setStatus('');
 
   renderer.setAnimationLoop(() => {
     orbit.update();

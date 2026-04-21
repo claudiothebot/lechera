@@ -42,15 +42,15 @@ import type {
 const INTERP_DELAY_MS = 100;
 /** Hard cap on snapshot history; ~1 s of buffer at 20 Hz. */
 const MAX_SNAPSHOTS = 24;
-/** Target body height for cloned Lecheras (matches local player). */
-const BODY_HEIGHT = 1.68;
+/** Target body height for cloned Lecheras (matches `main.ts` `LECHERA_TARGET_HEIGHT_M`). */
+const BODY_HEIGHT = 1.5;
 /** Reference walk speed at which the clip plays at native rate. */
 const WALK_SPEED_REFERENCE = 4.5;
 /**
  * Base jug height before `jugScaleForDreamIndex` (must match `main.ts`
  * `JUG_TARGET_HEIGHT`).
  */
-const JUG_TARGET_HEIGHT = 0.42;
+const JUG_TARGET_HEIGHT = 0.42 * (BODY_HEIGHT / 1.68);
 /** Vertical extra lift above the head bone so the jug sits on the skull. */
 const JUG_EXTRA_LIFT_Y = 0.08;
 /** Lift of the name tag above the jug, in metres. */

@@ -1,26 +1,26 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import type { TreeVariantKind } from './levelDefinition';
 
 /**
- * Static scenery tree — loaded from a Meshy-AI single-mesh GLB optimized
- * offline (simplify + 512 webp + meshopt) into `/public/models/tree-*-opt.glb`.
- *
- * Same pattern as `houseModel.ts`: load → centre on footprint → scale to
- * a target footprint → return an `instance()` factory that clones the
- * normalized template. Clones share geometry and materials, so N
- * placements only cost 1 GPU upload.
- *
- * Differences vs houses:
- *  - Larger default footprint (~8 m crown width) so close-up trees read
- *    as full trees, not bushes.
- *  - **No shadow casting** by default. Even for the small set we
- *    scatter (`TREE_FOREGROUND_COUNT` ≈ 8), full per-tree shadow maps
- *    tank the frame budget on integrated GPUs and add little to
- *    readability when the tree itself already reads as a vertical
- *    silhouette. Trees still *receive* shadows so the milkmaid /
- *    houses cast onto them correctly.
+ * Static scenery tree — GLB load + centre + ground at Y=0. **No uniform
+ * scaling** (author size in the export). Optional `castShadow` for props.
  */
+
+/** Canonical variant → optimised GLB path mapping. */
+export const TREE_VARIANT_URLS: Record<TreeVariantKind, string> = {
+  olive: '/models/tree-olive-opt.glb',
+  poplar: '/models/tree-poplar-opt.glb',
+  'poplar-alt': '/models/tree-poplar-2-opt.glb',
+};
+
+/** Human-friendly labels for the editor's variant picker. */
+export const TREE_VARIANT_LABELS: Record<TreeVariantKind, string> = {
+  olive: 'Olive',
+  poplar: 'Poplar',
+  'poplar-alt': 'Poplar (alt)',
+};
 
 export interface TreeModel {
   /** Local origin sits at the trunk base centre (XZ centroid, Y = 0). */
@@ -30,18 +30,25 @@ export interface TreeModel {
   halfY: number;
 }
 
-/**
- * Default target largest-XZ-axis size after scaling, in metres. Picked
- * so a grown tree reads as a real tree (~8 m crown ⇒ ~12–16 m tall
- * with the 1:1.5–1:2 aspect ratio of the Meshy exports). Override per
- * call when a particular variant should be smaller / larger.
- */
-const DEFAULT_TARGET_FOOTPRINT_M = 8.0;
+export interface LoadTreeModelOptions {
+  /** Ground props usually cast shadows; trees stay off for perf. */
+  castShadow?: boolean;
+  /**
+   * Extra uniform scale vs GLB (default **2** = +100 % for scattered trees).
+   * Props use **1** so only trees grow.
+   */
+  worldScale?: number;
+}
+
+/** +100 % on export size for scattered trees (`loadLevelTrees`). Props pass `worldScale: 1`. */
+export const TREE_SCATTER_WORLD_SCALE = 2;
 
 export async function loadTreeModel(
   url: string,
-  targetFootprintM: number = DEFAULT_TARGET_FOOTPRINT_M,
+  options: LoadTreeModelOptions = {},
 ): Promise<TreeModel> {
+  const castShadow = options.castShadow ?? false;
+  const worldScale = options.worldScale ?? TREE_SCATTER_WORLD_SCALE;
   const loader = new GLTFLoader();
   loader.setMeshoptDecoder(MeshoptDecoder);
   const gltf = await loader.loadAsync(url);
@@ -50,7 +57,7 @@ export async function loadTreeModel(
   scene.traverse((obj) => {
     const m = obj as THREE.Mesh;
     if (m.isMesh) {
-      m.castShadow = false;
+      m.castShadow = castShadow;
       m.receiveShadow = true;
     }
   });
@@ -62,23 +69,21 @@ export async function loadTreeModel(
   bbox.getSize(size);
   bbox.getCenter(centre);
 
-  const largestXZ = Math.max(size.x, size.z) || 1;
-  const scale = targetFootprintM / largestXZ;
-
   scene.position.set(-centre.x, -bbox.min.y, -centre.z);
 
   const wrapper = new THREE.Group();
   wrapper.name = 'tree';
   wrapper.add(scene);
-  wrapper.scale.setScalar(scale);
+  wrapper.scale.setScalar(worldScale);
 
+  const h = worldScale;
   return {
     instance() {
       return wrapper.clone(true);
     },
-    halfX: size.x * scale * 0.5,
-    halfZ: size.z * scale * 0.5,
-    halfY: size.y * scale * 0.5,
+    halfX: size.x * 0.5 * h,
+    halfZ: size.z * 0.5 * h,
+    halfY: size.y * 0.5 * h,
   };
 }
 

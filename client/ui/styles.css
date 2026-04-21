@@ -528,8 +528,7 @@ body {
 }
 
 /*
- * Player identity — dot sits immediately before the name (one line);
- * whole row centered like the timer.
+ * Player identity — flag + name (one line); whole row centered like the timer.
  */
 .net-badge {
   position: static;
@@ -537,7 +536,7 @@ body {
   flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 0.42rem;
+  gap: 0.5rem;
   padding: 0;
   margin: 0;
   border: none;
@@ -593,17 +592,17 @@ body {
     0 0 12px rgba(0, 0, 0, 0.35);
 }
 
-.net-badge__dot {
-  display: none;
+.net-badge__flag {
+  display: inline-flex;
   flex-shrink: 0;
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.05em;
+  line-height: 1;
 }
 
-.net-badge--connecting .net-badge__dot,
-.net-badge--online .net-badge__dot {
-  display: block;
+.net-badge__flag[hidden] {
+  display: none;
 }
 
 .net-badge--idle,
@@ -615,33 +614,15 @@ body {
   color: rgba(241, 210, 141, 0.85);
 }
 
-.net-badge--connecting .net-badge__dot {
-  background: #f1d28d;
-  box-shadow: 0 0 10px rgba(241, 210, 141, 0.65);
-  animation: net-badge-pulse 1.2s ease-in-out infinite;
-}
-
 .net-badge--online {
   color: rgba(247, 244, 236, 0.82);
 }
 
-.net-badge--online .net-badge__dot {
-  /* Defaults to the friendly green; per-player tint (set inline by
-   * `setNetStatus`) overrides this once the server-assigned hue lands. */
-  background: var(--net-badge-accent, #6fdd8a);
-  box-shadow:
-    0 0 10px var(--net-badge-accent, rgba(111, 221, 138, 0.9)),
-    0 0 2px rgba(20, 40, 30, 0.9);
-}
-
-@keyframes net-badge-pulse {
-  0%,
-  100% {
-    opacity: 0.45;
-  }
-  50% {
-    opacity: 1;
-  }
+/* Match name scale (`.net-badge--online .net-badge__text`); parent `font-size`
+ * stays small so idle/local stay compact — flag must opt into the same clamp. */
+.net-badge--online .net-badge__flag {
+  font-size: clamp(1rem, 2.9vw, 1.22rem);
+  line-height: 1;
 }
 
 /*
@@ -743,6 +724,17 @@ body {
 
 .scoreboard__name--self {
   color: var(--accent);
+}
+
+/* Phase 7 — country flag sits right before the name in the all-time
+   leaderboard. Fixed line-height keeps mixed-height rows aligned on
+   platforms whose flag emoji glyph has a slightly different ascent. */
+.scoreboard__flag {
+  display: inline-block;
+  margin-right: 0.35em;
+  font-size: 1.05em;
+  line-height: 1;
+  vertical-align: baseline;
 }
 
 .scoreboard__deliveries {
@@ -1020,6 +1012,7 @@ body.editor-active .level-editor-root {
 }
 
 .level-editor__selection,
+.level-editor__selection-label,
 .level-editor__status {
   font-size: 0.78rem;
   color: rgba(247, 244, 236, 0.78);
@@ -1027,4 +1020,139 @@ body.editor-active .level-editor-root {
 
 .level-editor__status {
   color: rgba(241, 210, 141, 0.88);
+  min-height: 1rem;
+}
+
+.level-editor__hint {
+  font-size: 0.74rem;
+  line-height: 1.35;
+  color: rgba(247, 244, 236, 0.58);
+  margin-top: -0.3rem;
+}
+
+.level-editor__card {
+  border: 1px solid rgba(247, 244, 236, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 0.55rem;
+  padding: 0.6rem 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.level-editor__card-title {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: rgba(247, 244, 236, 0.5);
+}
+
+.level-editor__selection-label {
+  font-weight: 500;
+}
+
+.level-editor__row--compact {
+  gap: 0.35rem;
+}
+
+.level-editor__rotate-buttons {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.3rem;
+}
+
+.level-editor__rotate-button {
+  padding: 0.42rem 0.3rem !important;
+  font-size: 0.74rem !important;
+  white-space: nowrap;
+}
+
+.level-editor__add-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.level-editor__add-kind {
+  /* Put the dropdown snug under the "Type" label; no extra box. */
+}
+
+.level-editor__add-kind[hidden] {
+  display: none !important;
+}
+
+.level-editor__save-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.55rem 0.6rem;
+  border-radius: 0.55rem;
+  border: 1px solid rgba(247, 244, 236, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.level-editor__save-status {
+  flex: 1 1 auto;
+  font-size: 0.76rem;
+  color: rgba(247, 244, 236, 0.6);
+}
+
+.level-editor__save-status--dirty {
+  color: rgba(241, 210, 141, 0.95);
+  font-weight: 500;
+}
+
+.level-editor__save-button {
+  flex: 0 0 auto !important;
+  background: rgba(120, 200, 130, 0.25) !important;
+  border-color: rgba(120, 200, 130, 0.55) !important;
+  color: var(--fg) !important;
+  font-weight: 500;
+  padding: 0.55rem 0.85rem !important;
+}
+
+.level-editor__save-button:disabled {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border-color: rgba(247, 244, 236, 0.12) !important;
+}
+
+.level-editor__advanced {
+  border-top: 1px solid rgba(247, 244, 236, 0.12);
+  padding-top: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.level-editor__advanced summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(247, 244, 236, 0.55);
+  list-style: none;
+  padding: 0.2rem 0;
+}
+
+.level-editor__advanced summary::before {
+  content: '▸ ';
+}
+
+.level-editor__advanced[open] summary::before {
+  content: '▾ ';
+}
+
+.level-editor__advanced > *:not(summary) {
+  margin-top: 0.35rem;
+}
+
+.level-editor__advanced textarea {
+  min-height: 8rem;
+}
+
+.level-editor__danger {
+  background: rgba(220, 100, 100, 0.15) !important;
+  border-color: rgba(220, 100, 100, 0.4) !important;
 }

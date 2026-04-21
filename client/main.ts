@@ -7,7 +7,13 @@ import {
   loadLevelHouses,
   loadLevelTextures,
   loadLevelTrees,
+  loadLevelSceneryProps,
 } from './game/level';
+import {
+  defaultLevelDefinition,
+  defaultLevelDefinitionUrls,
+  loadDefaultLevelDefinition,
+} from './game/levelLoader';
 import { createPlayer, PLAYER_RADIUS } from './game/player';
 import { createJugBalance, type BumpInput } from './game/jugBalance';
 import {
@@ -40,6 +46,7 @@ import {
   connectMultiplayer,
   OFFLINE_MULTIPLAYER_HANDLE,
   type MultiplayerHandle,
+  type RemotePlayerView,
 } from './net/multiplayer';
 import { createRemotePlayers, type RemotePlayersManager } from './net/remotePlayers';
 import {
@@ -51,10 +58,20 @@ import type { AllTimeEntry, ScoreboardEntry } from './ui/hud';
 import { getOrAskPlayerName } from './ui/nameModal';
 import type { Obstacle } from './game/level';
 import { buildBillboardPlacements } from './game/billboardLayout';
-import { bootLevelEditor } from './editor/levelEditor';
 
-/** Jug: base height in metres and extra lift above the head anchor. */
-const JUG_TARGET_HEIGHT = 0.42;
+/** ISO alpha-2 for HUD net badge flag; empty / missing → no flag. */
+function countryForNetBadge(self: RemotePlayerView | null): string | null {
+  const c = self?.country?.trim();
+  return c ? c : null;
+}
+
+/** Body height the lechera GLB is scaled to (match Meshy resize export, metres). */
+const LECHERA_TARGET_HEIGHT_M = 1.5;
+/**
+ * Jug height — was tuned for the old 1.68 m character; scale with body height
+ * so the cántaro stays proportionate.
+ */
+const JUG_TARGET_HEIGHT = 0.42 * (LECHERA_TARGET_HEIGHT_M / 1.68);
 const JUG_EXTRA_LIFT_Y = 0.08;
 
 /** Total run time in seconds. The Lechera has to deliver as much as she can before this runs out. */
@@ -118,6 +135,7 @@ async function boot() {
 
   const params = new URLSearchParams(window.location.search);
   if (params.get('editor') === '1') {
+    const { bootLevelEditor } = await import('./editor/levelEditor');
     await bootLevelEditor(canvas);
     return;
   }
@@ -145,7 +163,21 @@ async function boot() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   scene.add(sun);
 
-  const level = createLevel();
+  // Level geometry is still authored in `public/levels/level-01.json` and
+  // edited via the in-browser level editor (?editor=1). If
+  // `VITE_LEVEL_RUNTIME_PATH` is configured we try that derived artifact
+  // first, then fall back to the authored JSON, then finally to the baked-in
+  // default so offline/missing-file boots still work.
+  const levelDefinition = await loadDefaultLevelDefinition().catch(
+    (err) => {
+      console.warn(
+        `[level] failed to fetch ${defaultLevelDefinitionUrls().join(' -> ')}, using built-in default`,
+        err,
+      );
+      return defaultLevelDefinition();
+    },
+  );
+  const level = createLevel(levelDefinition);
   scene.add(level.group);
 
   loadLevelTextures(level, renderer).catch((err) => {
@@ -213,6 +245,7 @@ async function boot() {
     characterSource = charSrc;
     jugSource = jugSrc;
     character = createCharacterInstance(characterSource, {
+      targetHeight: LECHERA_TARGET_HEIGHT_M,
       rotateYToMatchPlayerFront: true,
       walkSpeedReference: 4.5,
     });
@@ -256,14 +289,19 @@ async function boot() {
   // World decoration + roadside tweet-billboards. Sequenced so billboards
   // avoid trees: trees register themselves as obstacles in `loadLevelTrees`
   // and billboard layout samples the level definition + current obstacle
-  // set to reject overlaps. Both phases are non-blocking — gameplay
-  // starts on the bare grass and pops in scenery / billboards as the
-  // GLBs resolve.
+  // set to reject overlaps. Scenery props (hay, cart, well) are decorative
+  // only. Non-blocking — gameplay starts on bare grass.
   (async () => {
     try {
       await loadLevelTrees(level, DREAM_GOALS);
     } catch (err) {
       console.error('[trees] failed to scatter trees', err);
+    }
+
+    try {
+      await loadLevelSceneryProps(level);
+    } catch (err) {
+      console.error('[scenery] failed to load props', err);
     }
 
     try {
@@ -447,7 +485,7 @@ async function boot() {
   // afterward, every frame's `sendPose` lands on the real connection,
   // `remotePlayers` starts spawning visuals for other players, and
   // delivery validation moves to the server.
-  hud.setNetStatus('connecting', null);
+  hud.setNetStatus('connecting', null, null, null);
 
   /**
    * Phase 5 — derive the HTTP base URL for `/leaderboard` from the
@@ -470,6 +508,7 @@ async function boot() {
       name: e.name,
       totalMilk: e.total_milk,
       roundsPlayed: e.rounds_played,
+      country: e.country ?? null,
     }));
     hud.setAllTimeLeaderboard(mapped, handle.selfName());
   }
@@ -520,15 +559,23 @@ async function boot() {
         // hydrated). Once the self view lands, the
         // `subscribeSelfProgression` hook below re-fires with the
         // tint so the HUD name picks up the player's colour.
-        hud.setNetStatus(status, name, multi.selfView()?.colorHue ?? null);
+        const self = multi.selfView();
+        hud.setNetStatus(
+          status,
+          name,
+          self?.colorHue ?? null,
+          countryForNetBadge(self),
+        );
       },
     }),
   ).then((handle) => {
     multi = handle;
+    const self0 = handle.selfView();
     hud.setNetStatus(
       handle.status(),
       handle.selfName(),
-      handle.selfView()?.colorHue ?? null,
+      self0?.colorHue ?? null,
+      countryForNetBadge(self0),
     );
     // Phase 5 — capture the HTTP origin sibling of the WS endpoint so
     // `refreshLeaderboard` knows where to fetch the all-time top from.
@@ -587,10 +634,12 @@ async function boot() {
         // is idempotent (early-returns when status/name/hue all
         // match the last call), so re-firing every snapshot is
         // cheap.
+        const selfHud = handle.selfView();
         hud.setNetStatus(
           handle.status(),
           handle.selfName(),
-          handle.selfView()?.colorHue ?? null,
+          selfHud?.colorHue ?? null,
+          countryForNetBadge(selfHud),
         );
         // First fire: take over from local progression.
         if (!serverProgressionLive) {

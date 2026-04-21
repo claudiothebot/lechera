@@ -1,7 +1,9 @@
 // Phase-5 smoke test: end-to-end Supabase leaderboard.
 //
 // What this validates depends on whether SUPABASE_URL / SUPABASE_ANON_KEY
-// are set in the environment when the dev server was started:
+// are available: this script loads `server/.env` via `dotenv` so the
+// parent process picks the same persistence mode as the spawned server.
+// (Without that, only the child had creds and the wrong branch ran.)
 //
 //  - PERSISTENCE OFF (no env vars on the server):
 //    Just verifies that GET /leaderboard returns 200 + `{ entries: [] }`.
@@ -22,11 +24,16 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { config as loadDotenv } from 'dotenv';
 import { Client } from '@colyseus/sdk';
 import { goalFor } from '@milk-dreams/shared';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_DIR = path.resolve(__dirname, '..');
+// Same `.env` the server loads — without this the *parent* process has
+// no `SUPABASE_*` while the spawned child does, so `persistenceEnabled`
+// below would be false and we'd take the wrong branch.
+loadDotenv({ path: path.join(SERVER_DIR, '.env') });
 const PORT = Number(process.env.MD_SMOKE_PORT ?? 2569);
 const HTTP_BASE = `http://127.0.0.1:${PORT}`;
 const WS_BASE = `ws://127.0.0.1:${PORT}`;
@@ -151,6 +158,8 @@ try {
   }
   console.log(`[step B] joined as ${myName}`);
 
+  room1.send('pose', { x: goal0.x, z: goal0.z, yaw: 0 });
+  await wait(100);
   room1.send('claim_delivery', { x: goal0.x, z: goal0.z });
   // Wait for the round to end (1.5 s) + persistence flush + scoreboard window.
   await wait(2500);
@@ -183,6 +192,8 @@ try {
   if (me2.name !== myName) {
     fail(`server changed our name on rejoin: got='${me2.name}'`);
   }
+  room2.send('pose', { x: goal0.x, z: goal0.z, yaw: 0 });
+  await wait(100);
   room2.send('claim_delivery', { x: goal0.x, z: goal0.z });
   await wait(2500);
   await room2.leave();
