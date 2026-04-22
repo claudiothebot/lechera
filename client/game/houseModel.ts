@@ -6,8 +6,8 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
  * Village house obstacle — GLB load + centre on XZ + ground at Y=0, then
  * optional world scale (below) on top of export size.
  */
-/** Uniform scale on authored house size (+50 % vs raw GLB footprint). */
-const HOUSE_WORLD_SCALE = 1.5;
+/** Uniform scale on authored house size (raw GLB footprint ×3.75). */
+const HOUSE_WORLD_SCALE = 3.75;
 
 /**
  * House variant GLB + label catalog. The canonical list of `HouseVariantKind`
