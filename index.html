@@ -2,7 +2,14 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#0a0a12" />
     <title>Milk Dreams</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -16,6 +23,57 @@
   <body>
     <div id="app">
       <div id="loading-screen" aria-live="polite">Loading…</div>
+      <!--
+        Portrait guard: shown only on coarse-pointer + portrait devices
+        (see `@media` in styles.css). We don't try to lock the real screen
+        orientation via the ScreenOrientation API here — browser support
+        is uneven and requires fullscreen on some platforms. A CSS-only
+        overlay is sufficient to keep players from fighting a squashed
+        HUD while holding their phone upright.
+      -->
+      <div id="orientation-lock" aria-hidden="true">
+        <div class="orientation-lock__card">
+          <svg
+            class="orientation-lock__icon"
+            viewBox="0 0 64 64"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+          >
+            <rect
+              x="12"
+              y="4"
+              width="28"
+              height="56"
+              rx="4"
+              ry="4"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+            />
+            <rect x="22" y="9" width="8" height="2" rx="1" fill="currentColor" opacity="0.7" />
+            <circle cx="26" cy="54" r="1.8" fill="currentColor" opacity="0.7" />
+            <path
+              d="M46 26 A14 14 0 0 1 60 40"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+            />
+            <path
+              d="M56 40 L60 40 L60 36"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          <h2 class="orientation-lock__title">Rotate your phone</h2>
+          <p class="orientation-lock__text">
+            Milk Dreams plays in landscape. Turn your device sideways to start.
+          </p>
+        </div>
+      </div>
       <div id="name-modal" class="name-modal hidden" aria-hidden="true" role="dialog" aria-labelledby="name-modal-title">
         <div class="name-modal__panel">
           <h2 id="name-modal-title" class="name-modal__title">What's your name?</h2>

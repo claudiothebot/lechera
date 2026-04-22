@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { createBootstrap } from './app/bootstrap';
+import { applyDeviceClass } from './app/device';
 import { createResize } from './app/resize';
 import { createInputSystem } from './systems/input';
 import {
@@ -162,6 +163,12 @@ const STARTUP_SPEED = 2.0;
 async function boot() {
   const canvas = document.querySelector<HTMLCanvasElement>('#game');
   if (!canvas) throw new Error('Canvas #game not found');
+
+  // Tag the body with `.is-touch` on coarse-pointer devices so every CSS
+  // block scoped to `body.is-touch` / `@media (pointer: coarse)` applies
+  // from the first paint. Safe to call before any other DOM wiring —
+  // idempotent and touches only `document.body.classList`.
+  applyDeviceClass();
 
   const params = new URLSearchParams(window.location.search);
   const perfMode = params.get('perf') === '1';
