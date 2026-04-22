@@ -46,7 +46,7 @@ import {
   type TweetBillboardsManager,
 } from '../game/tweetBillboards';
 import { installHdriSky } from '../render/sky';
-import { DREAM_GOALS } from '@milk-dreams/shared';
+import { DREAM_GOALS, GOAL_RADIUS } from '@milk-dreams/shared';
 
 type EditorMode = 'houses' | 'trees' | 'props' | 'billboards' | 'paving' | 'boundary';
 
@@ -82,11 +82,21 @@ interface EditorUi {
   advancedDownload: HTMLButtonElement;
   advancedImport: HTMLButtonElement;
   advancedJson: HTMLTextAreaElement;
+  showDreamCircles: HTMLInputElement;
 }
 
 const HELPER_HEIGHT_Y = 0.12;
 const BILLBOARD_HELPER_Y = 1.0;
 const DRAFT_STORAGE_KEY = 'milk-dreams/level-editor-draft/level-01';
+const DREAM_CIRCLES_PREF_KEY = 'milk-dreams/level-editor-show-dream-circles';
+const DREAM_CIRCLE_COLOR = 0xe84393;
+/**
+ * Lift the dream ring slightly higher than `HELPER_HEIGHT_Y` so it never
+ * z-fights with paving-path helpers that also sit at that height, and
+ * stays readable against the goal ring the runtime draws at y=0.05.
+ */
+const DREAM_CIRCLE_Y = 0.14;
+const DREAM_CIRCLE_LABEL_Y = 1.8;
 
 const MODE_LABELS: Record<EditorMode, string> = {
   houses: 'Houses',
@@ -175,6 +185,11 @@ function makeUi(root: HTMLElement): EditorUi {
         <button id="level-editor-save" type="button" class="level-editor__save-button">Save to file</button>
       </div>
 
+      <label class="level-editor__field level-editor__field--inline">
+        <input id="level-editor-show-dream-circles" type="checkbox" />
+        <span>Show dream circles</span>
+      </label>
+
       <details class="level-editor__advanced">
         <summary>Advanced</summary>
         <label class="level-editor__field">
@@ -220,6 +235,7 @@ function makeUi(root: HTMLElement): EditorUi {
     advancedDownload: query('#level-editor-download'),
     advancedImport: query('#level-editor-import'),
     advancedJson: query('#level-editor-json'),
+    showDreamCircles: query('#level-editor-show-dream-circles'),
   };
 }
 
@@ -256,6 +272,64 @@ function circleLine(radius: number, color: number): THREE.LineLoop {
   );
   line.userData.disposeManaged = true;
   return line;
+}
+
+/**
+ * Fill `group` with one ring + numbered badge per dream goal, using the
+ * shared `DREAM_GOALS` / `GOAL_RADIUS` constants. Pure visualisation —
+ * dream positions are not editor-authored (see `shared/src/dreams.ts`).
+ * Called once at boot; toggled via `group.visible`.
+ */
+function buildDreamCircles(group: THREE.Group) {
+  DREAM_GOALS.forEach((goal, index) => {
+    const ring = circleLine(GOAL_RADIUS, DREAM_CIRCLE_COLOR);
+    ring.position.set(goal.x, DREAM_CIRCLE_Y, goal.z);
+    // Draw the ring on top of the ground without the magenta line being
+    // hidden by the runtime's goal ring / aura at the first dream.
+    const ringMat = ring.material as THREE.LineBasicMaterial;
+    ringMat.depthTest = false;
+    ringMat.transparent = true;
+    ring.renderOrder = 10;
+    group.add(ring);
+
+    const label = makeDreamLabel(index + 1);
+    label.position.set(goal.x, DREAM_CIRCLE_LABEL_Y, goal.z);
+    group.add(label);
+  });
+}
+
+/**
+ * Canvas-backed sprite showing the 1-based dream index. Sprite (not a
+ * text mesh) so it always faces the camera as the orbit view rotates.
+ */
+function makeDreamLabel(n: number): THREE.Sprite {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = 'rgba(232, 67, 147, 0.92)';
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, size / 2 - 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'white';
+  ctx.font = 'bold 74px system-ui, -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(n), size / 2, size / 2 + 4);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.anisotropy = 4;
+  texture.needsUpdate = true;
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    depthTest: false,
+    transparent: true,
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(1.6, 1.6, 1);
+  sprite.renderOrder = 11;
+  return sprite;
 }
 
 function selectionSupportsRotation(selection: Selection): boolean {
@@ -411,6 +485,20 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
   const helpersGroup = new THREE.Group();
   helpersGroup.name = 'level-editor-helpers';
   scene.add(helpersGroup);
+
+  const dreamCirclesGroup = new THREE.Group();
+  dreamCirclesGroup.name = 'level-editor-dream-circles';
+  scene.add(dreamCirclesGroup);
+  buildDreamCircles(dreamCirclesGroup);
+  const initialShowDreamCircles = (() => {
+    try {
+      return localStorage.getItem(DREAM_CIRCLES_PREF_KEY) === '1';
+    } catch {
+      return false;
+    }
+  })();
+  dreamCirclesGroup.visible = initialShowDreamCircles;
+  ui.showDreamCircles.checked = initialShowDreamCircles;
 
   const serverLoaded = await loadInitialDefinition();
   let definition = cloneLevelDefinition(serverLoaded);
@@ -1128,6 +1216,17 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
   ui.saveButton.addEventListener('click', () => {
     void saveToServer();
   });
+  ui.showDreamCircles.addEventListener('change', () => {
+    const on = ui.showDreamCircles.checked;
+    dreamCirclesGroup.visible = on;
+    try {
+      localStorage.setItem(DREAM_CIRCLES_PREF_KEY, on ? '1' : '0');
+    } catch {
+      // Private-mode or quota errors are non-fatal — the toggle still
+      // works for the current session, just doesn't persist.
+    }
+  });
+
   ui.advancedAutoBillboards.addEventListener('click', autoGenerateBillboards);
   ui.advancedReset.addEventListener('click', () => {
     if (!confirm('Reset the level to the built-in default layout? Unsaved edits will be lost.')) {
