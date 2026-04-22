@@ -129,7 +129,9 @@ export function createCharacterInstance(
   // Per-instance material cloning. Without this, tinting one Lechera
   // would tint every Lechera (since `SkeletonUtils.clone` shares
   // materials by reference). Also flip on shadows (GLTFLoader leaves
-  // them off).
+  // them off) and force FrontSide — Meshy-style exports ship with
+  // `doubleSided: true` on opaque hero meshes, doubling fragment cost
+  // for no visible gain on a closed character silhouette.
   model.traverse((obj) => {
     const m = obj as THREE.Mesh;
     if (!m.isMesh) return;
@@ -137,6 +139,10 @@ export function createCharacterInstance(
     m.receiveShadow = true;
     if (tintColor) {
       m.material = cloneMaterialAndTint(m.material, tintColor);
+    }
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    for (const mat of mats) {
+      if (mat) mat.side = THREE.FrontSide;
     }
   });
 
@@ -185,7 +191,7 @@ export function createCharacterInstance(
 
   const headBone = findHeadBone(model);
   /** Extra lift above the head bone (world Y) so the jug sits on the skull, not the neck. */
-  const skullLiftY = 0.12;
+  const skullLiftY = 0.14;
   const fallbackLocal = new THREE.Vector3();
 
   function getJugWorldPosition(out: THREE.Vector3): void {
@@ -287,22 +293,47 @@ function stripScaleTracks(clip: THREE.AnimationClip) {
   clip.resetDuration();
 }
 
+/**
+ * Rigs shipped by different tools name the skull bone inconsistently:
+ * Mixamo uses `mixamorig:Head`, Meshy's biped rig uses `Head` but also
+ * adds `head_end` (tip of the skull, one link past Head) and `headfront`
+ * (face marker). A naive "first bone with `head` in the name" picked
+ * whichever appeared first in `skeleton.bones`, which could land the jug
+ * 5–10 cm above the skull (`head_end`) or on the face (`headfront`).
+ *
+ * Strategy: score candidates and pick the best match. The scoring is
+ * robust across Mixamo / Meshy / Ready Player Me / manual rigs.
+ */
 function findHeadBone(model: THREE.Object3D): THREE.Bone | null {
-  let found: THREE.Bone | null = null;
+  let bestBone: THREE.Bone | null = null;
+  let bestScore = -Infinity;
+
   model.traverse((obj) => {
-    if (found) return;
     const sk = obj as THREE.SkinnedMesh;
     if (!sk.isSkinnedMesh || !sk.skeleton) return;
     for (const bone of sk.skeleton.bones) {
-      const n = bone.name.toLowerCase();
-      if (
-        /head/i.test(bone.name) &&
-        !/headwear|forehead|handle/i.test(n)
-      ) {
-        found = bone;
-        return;
+      const name = bone.name;
+      const n = name.toLowerCase();
+      if (!n.includes('head')) continue;
+      if (/headwear|forehead|handle|face/i.test(n)) continue;
+
+      let score = 0;
+      // Prefer exact/suffix matches like `Head`, `mixamorig:Head`, `J_Bip_C_Head`.
+      if (/(^|[:_\-|.\s])head$/i.test(name)) score += 100;
+      // Penalise markers that sit *past* the head (tip) or on the face.
+      if (/head[_-]?end/i.test(n)) score -= 50;
+      if (/head[_-]?front/i.test(n)) score -= 60;
+      if (/head[_-]?top/i.test(n)) score -= 30;
+      // Small bias by name length: `Head` beats longer variants like
+      // `HeadControl` when the exact-suffix check didn't hit.
+      score -= name.length * 0.1;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestBone = bone;
       }
     }
   });
-  return found;
+
+  return bestBone;
 }

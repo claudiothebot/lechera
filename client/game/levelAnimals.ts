@@ -215,11 +215,18 @@ function prepareAnimal(scene: THREE.Group, targetSize: number): THREE.Object3D {
   const wrapper = new THREE.Group();
   wrapper.add(scene);
 
+  // Force FrontSide on every material: Meshy-style exports ship with
+  // `doubleSided: true` even on opaque hero props, doubling fragment cost
+  // for zero visible gain. Goal rewards are closed geometry, so single-
+  // sided is correct regardless of how the source GLB was exported.
   scene.traverse((obj) => {
     const m = obj as THREE.Mesh;
-    if (m.isMesh) {
-      m.castShadow = true;
-      m.receiveShadow = true;
+    if (!m.isMesh) return;
+    m.castShadow = true;
+    m.receiveShadow = true;
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    for (const mat of mats) {
+      if (mat) mat.side = THREE.FrontSide;
     }
   });
 

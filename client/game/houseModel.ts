@@ -51,9 +51,15 @@ export async function loadHouseModel(url = '/models/house-iberian-village-opt.gl
 
   scene.traverse((obj) => {
     const m = obj as THREE.Mesh;
-    if (m.isMesh) {
-      m.castShadow = true;
-      m.receiveShadow = true;
+    if (!m.isMesh) return;
+    m.castShadow = true;
+    m.receiveShadow = true;
+    // Meshy-exported GLBs ship with `doubleSided: true` by default, which
+    // doubles the fragment shader cost on opaque geometry. Force FrontSide
+    // here rather than editing the asset so a re-export can't regress it.
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    for (const mat of mats) {
+      if (mat) mat.side = THREE.FrontSide;
     }
   });
 

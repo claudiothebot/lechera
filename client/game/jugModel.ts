@@ -28,6 +28,17 @@ export function loadJugSource(url: string): Promise<JugSource> {
     const loader = new GLTFLoader();
     loader.setMeshoptDecoder(MeshoptDecoder);
     const gltf = await loader.loadAsync(url);
+    // Meshy exports default to `doubleSided: true`. Force FrontSide on the
+    // source so every clone/tint path inherits it (Material.clone() copies
+    // `.side`, so tinted instances pay the single-sided cost too).
+    gltf.scene.traverse((obj) => {
+      const m = obj as THREE.Mesh;
+      if (!m.isMesh) return;
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      for (const mat of mats) {
+        if (mat) mat.side = THREE.FrontSide;
+      }
+    });
     return { scene: gltf.scene };
   })();
   sourceCache.set(url, p);

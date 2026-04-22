@@ -27,6 +27,16 @@ const DECEL = 8.0;
  */
 const TURN_RATE = 2.5;
 
+/**
+ * Initial facing at spawn / after R-restart. `Math.PI` is "true north" in
+ * this convention (character forward = -Z, toward the goal). We bias it
+ * slightly toward -X so the lechera starts looking a bit to the left,
+ * roughly toward the well that sits forward-left of the spawn ring. Keeps
+ * the opening beat more picturesque without forcing the player's movement
+ * axis off the goal direction for long — W + a tap of D snaps them back.
+ */
+const INITIAL_FACING = Math.PI + 0.35;
+
 const BODY_HEIGHT = 1.4;
 /** World-space Y of the top-of-head pivot. */
 export const HEAD_Y = BODY_HEIGHT + 0.05;
@@ -139,8 +149,9 @@ export function createPlayer(scene: THREE.Scene, spawn: THREE.Vector3): Player {
   // Bumps buffer is reused and length-reset each frame. Consumers that want
   // to stash bumps across frames should copy them before the next update.
   const bumps: BumpEvent[] = [];
-  // Spawn facing -Z (toward the goal), not toward the camera.
-  let facing = Math.PI;
+  // Spawn facing slightly to the left of the goal direction so the
+  // opening shot shows the lechera looking toward the well.
+  let facing = INITIAL_FACING;
   group.rotation.y = facing + Math.PI;
 
   const result: PlayerUpdateResult = {
@@ -160,7 +171,7 @@ export function createPlayer(scene: THREE.Scene, spawn: THREE.Vector3): Player {
     group.position.y = 0;
     velocity.set(0, 0, 0);
     prevVelocity.set(0, 0, 0);
-    facing = Math.PI;
+    facing = INITIAL_FACING;
     group.rotation.y = facing + Math.PI;
     jugAnchor.position.set(position.x, HEAD_Y, position.z);
     jugAnchor.quaternion.identity();
