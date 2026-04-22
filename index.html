@@ -100,6 +100,15 @@
               </button>
               <button
                 type="button"
+                id="hud-action-story"
+                class="hud-action"
+                aria-haspopup="dialog"
+                aria-controls="story-panel"
+              >
+                Tale
+              </button>
+              <button
+                type="button"
                 id="hud-action-ranking"
                 class="hud-action"
                 aria-haspopup="dialog"
@@ -148,13 +157,34 @@
         <div id="toast"></div>
         <div id="hud-center">
           <div id="message"></div>
-          <div id="hint"><kbd class="kbd-inline">Space</kbd> / <kbd class="kbd-inline">Enter</kbd> controls</div>
+          <div id="hint"><kbd class="kbd-inline">Space</kbd> help</div>
         </div>
 
         <div id="instructions-panel" class="instructions-panel" aria-hidden="false" role="dialog" aria-labelledby="instructions-title">
           <div class="instructions-panel__backdrop" aria-hidden="true"></div>
           <div class="instructions-panel__card">
             <h2 id="instructions-title" class="instructions-panel__title">How to play</h2>
+
+            <p class="instructions-intro">
+              <svg
+                class="instructions-intro__radar"
+                viewBox="0 0 44 44"
+                xmlns="http://www.w3.org/2000/svg"
+                aria-hidden="true"
+              >
+                <circle cx="22" cy="22" r="20.5" fill="rgba(205, 190, 160, 0.08)" stroke="rgba(247, 244, 236, 0.35)" stroke-width="1" />
+                <circle cx="22" cy="22" r="13" fill="none" stroke="rgba(247, 244, 236, 0.18)" stroke-width="0.8" stroke-dasharray="2 2" />
+                <path d="M22 16 L26 27 L22 25 L18 27 Z" fill="#f7f4ec" stroke="rgba(10, 10, 18, 0.7)" stroke-width="0.6" />
+                <circle cx="33" cy="13" r="3" fill="none" stroke="rgba(255, 216, 107, 0.85)" stroke-width="1">
+                  <animate attributeName="r" from="2.8" to="8" dur="1.4s" repeatCount="indefinite" />
+                  <animate attributeName="stroke-opacity" from="0.85" to="0" dur="1.4s" repeatCount="indefinite" />
+                </circle>
+                <circle cx="33" cy="13" r="2.4" fill="#ffd86b" stroke="rgba(10, 10, 18, 0.85)" stroke-width="0.6" />
+              </svg>
+              <span class="instructions-intro__text">
+                <b>3-minute rounds.</b> Chase the glowing dream on your radar and deliver the milk &mdash; without spilling.
+              </span>
+            </p>
 
             <div class="instructions-diagram" aria-hidden="true">
               <!-- Left: arrow-key cross, aligned to the jug -->
@@ -237,12 +267,62 @@
               <li>
                 <span class="instructions-list__keys">
                   <kbd class="kbd kbd--wide">Space</kbd>
-                  <span class="instructions-list__sep">/</span>
-                  <kbd class="kbd kbd--wide">Enter</kbd>
                 </span>
-                <span class="instructions-list__text">toggle this panel, or click outside to close</span>
+                <span class="instructions-list__text">toggle this panel</span>
               </li>
             </ul>
+          </div>
+        </div>
+
+        <div
+          id="story-panel"
+          class="story-panel hidden"
+          aria-hidden="true"
+          role="dialog"
+          aria-labelledby="story-title"
+        >
+          <div class="story-panel__backdrop" aria-hidden="true"></div>
+          <div class="story-panel__card">
+            <figure class="story-panel__figure">
+              <img
+                class="story-panel__cover"
+                src="/assets/milkmaid-fable.jpg"
+                alt="Vintage Spanish book cover of Fábulas Escogidas, Vol. 2 — a milkmaid carrying a jug on her head and a basket under her arm along a country path."
+                loading="lazy"
+                decoding="async"
+              />
+            </figure>
+            <h2 id="story-title" class="story-panel__title">The Milkmaid</h2>
+            <p class="story-panel__subtitle">an old Spanish fable</p>
+
+            <blockquote class="story-panel__epigraph">
+              <span class="story-panel__verse">
+                &laquo;Llevaba en la cabeza<br />
+                una Lechera el c&aacute;ntaro al mercado<br />
+                con aquella presteza,<br />
+                con aquel aire, con aquel agrado&hellip;&raquo;
+              </span>
+              <cite>&mdash; F&eacute;lix Mar&iacute;a de Samaniego</cite>
+            </blockquote>
+
+            <div class="story-panel__body">
+              <p>
+                A young milkmaid set off for market one morning, balancing a jug of fresh milk on her head.
+              </p>
+              <p>
+                As she walked, she began to dream. With the coins she would earn, she'd buy a basket of eggs.
+                From the eggs, a flock of chickens. From the chickens, a piglet, then a fat pig, then a calf,
+                then a cow. One dream led to the next, each sweeter than the last.
+              </p>
+              <p>
+                Lost in her castles in the air, she skipped with joy &mdash; and the jug slipped from her head.
+                The milk spilled across the path, and with it every dream she had built.
+              </p>
+            </div>
+
+            <p class="story-panel__moral">
+              <b>Moral</b> &mdash; don't count on what you haven't delivered yet.
+            </p>
           </div>
         </div>
 

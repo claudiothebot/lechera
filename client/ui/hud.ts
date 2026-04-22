@@ -106,6 +106,16 @@ export interface Hud {
   /** Whether the instructions overlay is currently visible (for conditional HUD renders). */
   getInstructionsVisible(): boolean;
   /**
+   * Show / hide the "Tale" panel (the traditional Spanish fable of La
+   * Lechera the game is themed around). Mutually exclusive with the
+   * instructions panel — opening one closes the other.
+   */
+  setStoryVisible(visible: boolean): void;
+  /** Toggle the story panel. Returns the new visibility state. */
+  toggleStory(): boolean;
+  /** Whether the story overlay is currently visible. */
+  getStoryVisible(): boolean;
+  /**
    * Milk on the jug (`carrying`) and total deliveries completed (`delivered`;
    * same meaning as in the game-over summary).
    */
@@ -183,6 +193,13 @@ export interface HudOptions {
    */
   onInstructionsClick?: () => void;
   /**
+   * Called when the player clicks the "Tale" HUD button. The HUD
+   * already toggles the story panel internally; the callback exists so
+   * the caller can mirror side effects (e.g. cancel the auto-hide on
+   * the instructions panel so things don't fight each other on boot).
+   */
+  onStoryClick?: () => void;
+  /**
    * Called when the player clicks the "Ranking" HUD button. The
    * caller decides whether to open the overlay (via `showRanking`)
    * with the current-round entries + all-time leaderboard, or close
@@ -234,6 +251,12 @@ export function createHud(options: HudOptions = {}): Hud {
     document.querySelector<HTMLButtonElement>('#hud-action-instructions');
   const rankingButton =
     document.querySelector<HTMLButtonElement>('#hud-action-ranking');
+  const storyPanel = document.querySelector<HTMLElement>('#story-panel')!;
+  const storyBackdrop = storyPanel.querySelector<HTMLElement>(
+    '.story-panel__backdrop',
+  );
+  const storyButton =
+    document.querySelector<HTMLButtonElement>('#hud-action-story');
   const balanceHints = document.querySelector<HTMLElement>('#balance-hints')!;
   const balanceHintUp = balanceHints.querySelector<HTMLElement>('.balance-hint--up')!;
   const balanceHintDown = balanceHints.querySelector<HTMLElement>('.balance-hint--down')!;
@@ -418,28 +441,92 @@ export function createHud(options: HudOptions = {}): Hud {
     );
   };
   syncInstructionsButton();
+
+  // --- Boot attract-mode on the Instructions button ---------------------
+  // First-time players don't always notice the HUD button once the
+  // initial "How to play" panel auto-hides. We tag the button with an
+  // attention class at boot so CSS pulses it while the panel is closed
+  // (`.hud-action--attention:not(.is-active)`), then clear the class
+  // after ~30s or on first interaction / panel toggle, whichever comes
+  // first. Interaction wins so we don't keep pulsing at a player who has
+  // already acknowledged the button.
+  const ATTENTION_MS = 30_000;
+  let attentionTimer: number | null = null;
+  const stopAttention = (): void => {
+    if (attentionTimer !== null) {
+      window.clearTimeout(attentionTimer);
+      attentionTimer = null;
+    }
+    instructionsButton?.classList.remove('hud-action--attention');
+  };
+  if (instructionsButton) {
+    instructionsButton.classList.add('hud-action--attention');
+    attentionTimer = window.setTimeout(stopAttention, ATTENTION_MS);
+  }
+
   const setInstructionsVisible: Hud['setInstructionsVisible'] = (visible) => {
     if (visible === instructionsVisible) return;
+    // Mutual exclusion: the story panel is a sibling popup with the same
+    // chrome; we don't want both open at once because their cards would
+    // stack and the backdrop clicks would fight for precedence.
+    if (visible && storyVisible) setStoryVisible(false);
     instructionsVisible = visible;
     instructionsPanel.classList.toggle('hidden', !visible);
     instructionsPanel.setAttribute('aria-hidden', visible ? 'false' : 'true');
     syncInstructionsButton();
   };
   const toggleInstructions: Hud['toggleInstructions'] = () => {
+    // Any explicit toggle counts as acknowledgement of the button's role.
+    stopAttention();
     setInstructionsVisible(!instructionsVisible);
     return instructionsVisible;
   };
   const getInstructionsVisible: Hud['getInstructionsVisible'] = () =>
     instructionsVisible;
 
-  // Wire the two HUD buttons once. The callbacks own state transitions
-  // so hud.ts doesn't need to know about multiplayer / autoHidePending.
+  // --- Story panel (traditional Spanish fable) --------------------------
+  // Same overlay model as the instructions panel: a backdrop that closes
+  // on click, a card with prose. Kept purely presentational — no game
+  // state depends on it. Opens/closes are mutually exclusive with the
+  // instructions panel so only one narrative popup is ever on screen.
+  let storyVisible = !storyPanel.classList.contains('hidden');
+  const syncStoryButton = (): void => {
+    storyButton?.classList.toggle('is-active', storyVisible);
+    storyButton?.setAttribute(
+      'aria-expanded',
+      storyVisible ? 'true' : 'false',
+    );
+  };
+  syncStoryButton();
+  const setStoryVisible: Hud['setStoryVisible'] = (visible) => {
+    if (visible === storyVisible) return;
+    if (visible && instructionsVisible) setInstructionsVisible(false);
+    storyVisible = visible;
+    storyPanel.classList.toggle('hidden', !visible);
+    storyPanel.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    syncStoryButton();
+  };
+  const toggleStory: Hud['toggleStory'] = () => {
+    setStoryVisible(!storyVisible);
+    return storyVisible;
+  };
+  const getStoryVisible: Hud['getStoryVisible'] = () => storyVisible;
+
+  // Wire the HUD buttons once. The callbacks own state transitions so
+  // hud.ts doesn't need to know about multiplayer / autoHidePending.
   instructionsButton?.addEventListener('click', (ev) => {
     ev.preventDefault();
     // Buttons live inside the always-focusable HUD; blurring them after
     // click prevents Space/Enter from re-triggering via :focus.
     instructionsButton.blur();
+    stopAttention();
     options.onInstructionsClick?.();
+  });
+  storyButton?.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    storyButton.blur();
+    toggleStory();
+    options.onStoryClick?.();
   });
   rankingButton?.addEventListener('click', (ev) => {
     ev.preventDefault();
@@ -651,6 +738,9 @@ export function createHud(options: HudOptions = {}): Hud {
   instructionsBackdrop?.addEventListener('click', () => {
     setInstructionsVisible(false);
   });
+  storyBackdrop?.addEventListener('click', () => {
+    setStoryVisible(false);
+  });
   scoreboardBackdrop?.addEventListener('click', () => {
     hideScoreboard();
   });
@@ -733,6 +823,9 @@ export function createHud(options: HudOptions = {}): Hud {
     setInstructionsVisible,
     toggleInstructions,
     getInstructionsVisible,
+    setStoryVisible,
+    toggleStory,
+    getStoryVisible,
     setMilkStats,
     setDreamLabel,
     setTime,

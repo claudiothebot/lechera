@@ -308,6 +308,12 @@ async function boot() {
       // auto-hide so the panel stays open until the player dismisses it.
       autoHidePending = false;
     },
+    onStoryClick: () => {
+      // The HUD already toggled the story panel; we just cancel the
+      // boot-time auto-hide so the player isn't fighting the instructions
+      // panel reopening under the story card later.
+      autoHidePending = false;
+    },
     onRankingClick: () => {
       if (hud.isScoreboardVisible()) {
         hud.hideScoreboard();
