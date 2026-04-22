@@ -603,6 +603,16 @@ body {
   color: var(--fg-dim);
 }
 
+/*
+ * Keyboard-specific sub-line (currently the "R to dream again"
+ * reminder). Hidden on touch devices where the `#game-over-cta` button
+ * is the primary restart affordance — no point telling a phone player
+ * to press a key that doesn't exist.
+ */
+body.is-touch #message .message-sub--kbd {
+  display: none;
+}
+
 #message.win {
   color: var(--accent);
 }
@@ -887,6 +897,103 @@ body {
   /* Align WASD with the lechera's body (lower half of the 3D preview). */
   align-self: end;
   padding-bottom: 2.2rem;
+}
+
+/*
+ * kbd / touch variants of each diagram side. Desktop shows only the
+ * keyboard cluster; touch (body.is-touch) swaps to the joystick glyph.
+ * Default hides the touch variant so desktop never sees the joystick
+ * SVG stacked below the keys.
+ */
+.instructions-diagram__side--touch {
+  display: none;
+}
+
+body.is-touch .instructions-diagram__side--kbd {
+  display: none;
+}
+
+body.is-touch .instructions-diagram__side--touch {
+  display: flex;
+}
+
+.instructions-joystick {
+  width: 108px;
+  height: 108px;
+  color: var(--text-main);
+}
+
+/*
+ * One-line helper shown only on touch devices, replacing the keyboard
+ * list (`.instructions-list--kbd`). Keep this above the list in the
+ * DOM so screen readers narrate the touch hint before the fallback
+ * on assistive tech that ignores `body.is-touch` styling.
+ */
+.instructions-touch-hint {
+  display: none;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: rgba(247, 244, 236, 0.75);
+  text-align: center;
+  margin: 0.6rem 0 0.4rem;
+}
+
+body.is-touch .instructions-touch-hint {
+  display: block;
+}
+
+body.is-touch .instructions-list--kbd {
+  display: none;
+}
+
+/*
+ * Tap-to-restart CTA. Visible on any device once the HUD removes
+ * `.hidden` (game-over). Sized bigger than the surrounding message-sub
+ * text so a thumb on a phone lands cleanly, but visually quiet enough
+ * that desktop players aren't distracted during play.
+ */
+.game-over-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0.6rem auto 0;
+  padding: 0.7rem 1.4rem;
+  min-height: 44px; /* iOS HIG minimum tap target */
+  font-family: var(--font-display, var(--font-mono));
+  font-size: 1rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #0a0a12;
+  background: rgba(241, 210, 141, 0.95);
+  border: 1.5px solid rgba(255, 255, 255, 0.6);
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  transition:
+    transform 120ms ease-out,
+    box-shadow 160ms ease-out;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.game-over-cta:hover,
+.game-over-cta:focus-visible {
+  transform: translateY(-1px);
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  outline: none;
+}
+
+.game-over-cta:active {
+  transform: translateY(1px);
+}
+
+.game-over-cta.hidden {
+  display: none;
 }
 
 .instructions-diagram__caption {
@@ -1681,7 +1788,11 @@ body.editor-active .level-editor-root {
 }
 
 .level-editor__field--inline input[type='checkbox'] {
+  width: auto;
   margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
   flex: 0 0 auto;
   cursor: pointer;
 }
@@ -2152,11 +2263,35 @@ body.editor-active .level-editor-root {
     max-height: calc(100vh - 1.2rem);
     max-height: calc(100dvh - 1.2rem);
     padding: 1rem 1.1rem 1.1rem;
+    /*
+     * Allow the card to scroll on short phone viewports (landscape
+     * height ~390 px on iPhone 14) when the diagram + touch hint
+     * overflow.
+     */
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .instructions-panel__card,
   .story-panel__card {
     width: min(30rem, calc(100vw - 1rem));
+  }
+
+  /*
+   * Shrink the joystick glyph + preview canvas when the instructions
+   * panel has to fit inside ~370 px of height.
+   */
+  .instructions-joystick {
+    width: 78px;
+    height: 78px;
+  }
+
+  .instructions-diagram__figure {
+    max-width: 180px;
+  }
+
+  .instructions-diagram {
+    gap: 0.5rem;
   }
 }
 

@@ -355,6 +355,13 @@ async function boot() {
         hud.setAllTimeLeaderboard([], multi.selfName());
       }
     },
+    // Tap-to-restart button: routes through the same `restart()` used
+    // by the keyboard `R` path. Closure captures `restart` by
+    // reference — it's defined further down in this file but exists by
+    // the time the user can possibly click this button (round is over).
+    onRestartClick: () => {
+      restart();
+    },
   });
   hud.setDebugInvincible(DEBUG_INVINCIBLE);
   const minimapWrap = document.querySelector<HTMLElement>('#minimap-wrap');

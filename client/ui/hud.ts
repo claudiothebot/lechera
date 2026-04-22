@@ -206,6 +206,13 @@ export interface HudOptions {
    * it (via `hideScoreboard`) if already visible.
    */
   onRankingClick?: () => void;
+  /**
+   * Called when the player taps the "Play again" button shown on
+   * game-over. Exists mainly for touch devices (no `R` key), but
+   * desktop can click it too — both paths should route to the same
+   * `restart()` in main.ts.
+   */
+  onRestartClick?: () => void;
 }
 
 export function createHud(options: HudOptions = {}): Hud {
@@ -257,6 +264,22 @@ export function createHud(options: HudOptions = {}): Hud {
   );
   const storyButton =
     document.querySelector<HTMLButtonElement>('#hud-action-story');
+  // Optional by design: older builds / tests may not render this
+  // button, and we want the HUD to degrade to the pre-existing keyboard
+  // restart affordance without throwing.
+  const restartCtaButton =
+    document.querySelector<HTMLButtonElement>('#game-over-cta');
+
+  const showRestartCta = (): void => {
+    if (!restartCtaButton) return;
+    restartCtaButton.classList.remove('hidden');
+    restartCtaButton.setAttribute('aria-hidden', 'false');
+  };
+  const hideRestartCta = (): void => {
+    if (!restartCtaButton) return;
+    restartCtaButton.classList.add('hidden');
+    restartCtaButton.setAttribute('aria-hidden', 'true');
+  };
   const balanceHints = document.querySelector<HTMLElement>('#balance-hints')!;
   const balanceHintUp = balanceHints.querySelector<HTMLElement>('.balance-hint--up')!;
   const balanceHintDown = balanceHints.querySelector<HTMLElement>('.balance-hint--down')!;
@@ -406,18 +429,23 @@ export function createHud(options: HudOptions = {}): Hud {
     messageEl.classList.remove('win', 'fail');
     if (status === 'playing') {
       messageEl.textContent = '';
+      hideRestartCta();
       return;
     }
     if (status === 'spilled') {
       messageEl.classList.add('fail');
       const litres = ctx?.litresDelivered ?? 0;
       const dream = ctx?.currentDream ?? '—';
+      // `message-sub--kbd` hides the "R to …" line on touch devices via
+      // CSS (`body.is-touch .message-sub--kbd { display: none; }`): the
+      // dedicated `game-over-cta` button handles restart there.
       messageEl.innerHTML =
         `You spilled the milk!<br>` +
         `<span class="message-sub">` +
         `You were dreaming of <b>${dream}</b>. You had delivered ${litres} L.` +
         `</span><br>` +
-        `<span class="message-sub">R to dream again</span>`;
+        `<span class="message-sub message-sub--kbd">R to dream again</span>`;
+      showRestartCta();
       return;
     }
     messageEl.classList.add('fail');
@@ -425,7 +453,8 @@ export function createHud(options: HudOptions = {}): Hud {
     messageEl.innerHTML =
       `Time's up<br>` +
       `<span class="message-sub">You delivered ${litres} L before dawn.</span><br>` +
-      `<span class="message-sub">R to start again</span>`;
+      `<span class="message-sub message-sub--kbd">R to start again</span>`;
+    showRestartCta();
   };
 
   const setLocked: Hud['setLocked'] = (locked) => {
@@ -532,6 +561,11 @@ export function createHud(options: HudOptions = {}): Hud {
     ev.preventDefault();
     rankingButton.blur();
     options.onRankingClick?.();
+  });
+  restartCtaButton?.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    restartCtaButton.blur();
+    options.onRestartClick?.();
   });
 
   const setMilkStats: Hud['setMilkStats'] = (carrying, delivered) => {

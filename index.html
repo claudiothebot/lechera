@@ -215,6 +215,21 @@
         <div id="toast"></div>
         <div id="hud-center">
           <div id="message"></div>
+          <!--
+            Tap-to-restart CTA. Shown by the HUD alongside the game-over
+            message (status 'spilled' / 'timeout') so touch players, who
+            have no `R` key to press, still get a visible one-tap restart.
+            Desktop users keep the keyboard shortcut AND can click this —
+            both paths call the same `restart()` in main.ts.
+          -->
+          <button
+            id="game-over-cta"
+            class="game-over-cta hidden"
+            type="button"
+            aria-hidden="true"
+          >
+            Play again
+          </button>
           <div id="hint"><kbd class="kbd-inline">Space</kbd> help</div>
         </div>
 
@@ -245,14 +260,37 @@
             </p>
 
             <div class="instructions-diagram" aria-hidden="true">
-              <!-- Left: arrow-key cross, aligned to the jug -->
-              <div class="instructions-diagram__side instructions-diagram__side--jug">
+              <!--
+                Two parallel diagram sides per axis: the `--kbd` variants
+                show the keyboard mapping on desktop, the `--touch`
+                variants show joystick glyphs on coarse-pointer devices.
+                CSS (`body.is-touch .instructions-diagram__side--kbd` &c.)
+                decides which pair is visible so the layout never shows
+                both at once.
+              -->
+              <!-- Left (kbd): arrow-key cross, aligned to the jug -->
+              <div class="instructions-diagram__side instructions-diagram__side--jug instructions-diagram__side--kbd">
                 <div class="instructions-keys instructions-keys--cross">
                   <kbd class="kbd kbd--arrow kbd--top">↑</kbd>
                   <kbd class="kbd kbd--arrow kbd--left">←</kbd>
                   <kbd class="kbd kbd--arrow kbd--mid">↓</kbd>
                   <kbd class="kbd kbd--arrow kbd--right">→</kbd>
                 </div>
+                <div class="instructions-diagram__caption">Balance the jug</div>
+              </div>
+              <!-- Left (touch): right-thumb joystick glyph -->
+              <div class="instructions-diagram__side instructions-diagram__side--jug instructions-diagram__side--touch">
+                <svg
+                  class="instructions-joystick"
+                  viewBox="0 0 120 120"
+                  xmlns="http://www.w3.org/2000/svg"
+                  aria-hidden="true"
+                >
+                  <circle cx="60" cy="60" r="48" fill="rgba(10,10,18,0.42)" stroke="rgba(247,244,236,0.4)" stroke-width="2" />
+                  <circle cx="60" cy="60" r="36" fill="none" stroke="rgba(247,244,236,0.18)" stroke-width="1" stroke-dasharray="3 4" />
+                  <circle cx="72" cy="52" r="20" fill="rgba(241,210,141,0.85)" stroke="rgba(255,255,255,0.55)" stroke-width="1.6" />
+                  <path d="M60 22 L60 14 M60 98 L60 106 M22 60 L14 60 M98 60 L106 60" stroke="rgba(247,244,236,0.55)" stroke-width="2" stroke-linecap="round" />
+                </svg>
                 <div class="instructions-diagram__caption">Balance the jug</div>
               </div>
 
@@ -266,8 +304,8 @@
                 ></canvas>
               </div>
 
-              <!-- Right: WASD cross, aligned to the body -->
-              <div class="instructions-diagram__side instructions-diagram__side--wasd">
+              <!-- Right (kbd): WASD cross, aligned to the body -->
+              <div class="instructions-diagram__side instructions-diagram__side--wasd instructions-diagram__side--kbd">
                 <div class="instructions-keys instructions-keys--cross">
                   <kbd class="kbd kbd--top">W</kbd>
                   <kbd class="kbd kbd--left">A</kbd>
@@ -276,9 +314,28 @@
                 </div>
                 <div class="instructions-diagram__caption">Move the milkmaid</div>
               </div>
+              <!-- Right (touch): left-thumb joystick glyph, mirrors the jug side -->
+              <div class="instructions-diagram__side instructions-diagram__side--wasd instructions-diagram__side--touch">
+                <svg
+                  class="instructions-joystick"
+                  viewBox="0 0 120 120"
+                  xmlns="http://www.w3.org/2000/svg"
+                  aria-hidden="true"
+                >
+                  <circle cx="60" cy="60" r="48" fill="rgba(10,10,18,0.42)" stroke="rgba(247,244,236,0.4)" stroke-width="2" />
+                  <circle cx="60" cy="60" r="36" fill="none" stroke="rgba(247,244,236,0.18)" stroke-width="1" stroke-dasharray="3 4" />
+                  <circle cx="52" cy="44" r="20" fill="rgba(241,210,141,0.85)" stroke="rgba(255,255,255,0.55)" stroke-width="1.6" />
+                  <path d="M60 22 L60 14 M60 98 L60 106 M22 60 L14 60 M98 60 L106 60" stroke="rgba(247,244,236,0.55)" stroke-width="2" stroke-linecap="round" />
+                </svg>
+                <div class="instructions-diagram__caption">Move the milkmaid</div>
+              </div>
             </div>
 
-            <ul class="instructions-list">
+            <p class="instructions-touch-hint" aria-hidden="true">
+              Tap the milkmaid icon to close. The two thumb zones at the bottom of the screen control movement and balance.
+            </p>
+
+            <ul class="instructions-list instructions-list--kbd">
               <li>
                 <span class="instructions-list__keys">
                   <!-- Mouse with left-button highlighted. Monochrome so it picks up `currentColor`. -->
