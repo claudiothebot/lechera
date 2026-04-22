@@ -384,6 +384,24 @@
           </div>
         </div>
 
+        <!--
+          Touch joysticks (mobile V2). Hidden on desktop via CSS; on
+          coarse-pointer devices the two zones capture pointerdown within
+          their bottom-corner rectangles and the nested `.touch-stick`
+          becomes visible at the touch origin (dynamic-centre design).
+          Wiring lives in `systems/touchControls.ts`.
+        -->
+        <div id="touch-zone-left" class="touch-zone touch-zone--left" aria-hidden="true">
+          <div id="touch-stick-left" class="touch-stick">
+            <span class="touch-stick__thumb"></span>
+          </div>
+        </div>
+        <div id="touch-zone-right" class="touch-zone touch-zone--right" aria-hidden="true">
+          <div id="touch-stick-right" class="touch-stick">
+            <span class="touch-stick__thumb"></span>
+          </div>
+        </div>
+
         <div id="scoreboard" class="scoreboard hidden" aria-hidden="true">
           <div class="scoreboard__backdrop" aria-hidden="true"></div>
           <div class="scoreboard__panel">

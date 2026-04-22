@@ -1670,6 +1670,22 @@ body.editor-active .level-editor-root {
   color: rgba(247, 244, 236, 0.52);
 }
 
+.level-editor__field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.level-editor__field--inline span {
+  margin-top: 0;
+}
+
+.level-editor__field--inline input[type='checkbox'] {
+  margin: 0;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
 .level-editor select,
 .level-editor input,
 .level-editor textarea,
@@ -1872,6 +1888,127 @@ body.editor-active .level-editor-root {
  * don't touch the desktop cascade.
  * ========================================================================= */
 
+/* ---- Touch joysticks (hidden on desktop) ----------------------------- */
+/*
+ * Two pointer-capturing zones pinned to the bottom corners. Each zone
+ * is a transparent rectangle — the visible stick (.touch-stick) is
+ * inside it, positioned on pointerdown at the exact touch point and
+ * revealed with `.is-active`. Kept `display: none` on desktop so
+ * neither zone can steal pointerdown from the canvas.
+ */
+.touch-zone {
+  position: fixed;
+  bottom: 0;
+  width: 46vw;
+  height: 48vh;
+  z-index: 6;
+  display: none;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  /*
+   * Faint tint so the zone is discoverable on first boot without being
+   * distracting once the player knows where it is. Reduced further in
+   * landscape/mobile breakpoint if it still feels heavy.
+   */
+  background: radial-gradient(
+    circle at center 72%,
+    rgba(255, 255, 255, 0.03) 0%,
+    rgba(255, 255, 255, 0) 58%
+  );
+}
+
+.touch-zone--left {
+  left: 0;
+  padding-left: env(safe-area-inset-left);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.touch-zone--right {
+  right: 0;
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.touch-stick {
+  position: absolute;
+  width: 140px;
+  height: 140px;
+  margin-left: -70px;
+  margin-top: -70px;
+  /*
+   * The zone sets `left`/`top` on pointerdown to the touch client
+   * coords (minus the zone rect) — negative margins centre the 140px
+   * base on that point.
+   */
+  border-radius: 50%;
+  background: rgba(10, 10, 18, 0.28);
+  border: 1.5px solid rgba(247, 244, 236, 0.28);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+  pointer-events: none;
+}
+
+.touch-stick.is-active {
+  opacity: 1;
+}
+
+.touch-stick__thumb {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: rgba(241, 210, 141, 0.82);
+  border: 1.5px solid rgba(255, 255, 255, 0.55);
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  transform: translate(-50%, -50%);
+  /*
+   * Transition on the thumb return-to-centre only: while the finger is
+   * dragging we overwrite the transform every pointermove and the
+   * animation would visibly lag. The js-side reset unsets `is-active`
+   * AFTER we set the centred transform, which is fine since opacity is
+   * what's animated on release.
+   */
+  pointer-events: none;
+}
+
+/*
+ * Tag at the bottom of each zone so first-time touch players know which
+ * stick does what without reading the help panel. Kept small and muted
+ * so it doesn't steal focus during play.
+ */
+.touch-zone::after {
+  position: absolute;
+  left: 50%;
+  bottom: max(0.8rem, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(247, 244, 236, 0.4);
+  pointer-events: none;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.touch-zone--left::after {
+  content: 'Move';
+}
+
+.touch-zone--right::after {
+  content: 'Balance';
+}
+
 /* ---- Orientation lock overlay ---------------------------------------- */
 /*
  * Hidden by default on desktop and on any non-coarse-pointer device. The
@@ -1947,8 +2084,18 @@ body.editor-active .level-editor-root {
   color: var(--fg-dim);
 }
 
-/* ---- Mobile landscape: compact HUD ---------------------------------- */
+/* ---- Mobile landscape: compact HUD + visible joysticks -------------- */
 @media (pointer: coarse) and (orientation: landscape) {
+  /*
+   * Reveal the two joystick zones. CSS alone can't make them functional
+   * — the pointer handlers live in `touchControls.ts` — but keeping
+   * the display switch in CSS means a desktop dev tools "responsive
+   * mode" preview won't surface them when it's not supposed to.
+   */
+  .touch-zone {
+    display: block;
+  }
+
   /*
    * Left card: tighter padding, smaller max-width so the joystick zone
    * (bottom-left, coming in PR2) has breathing room above it. Respect

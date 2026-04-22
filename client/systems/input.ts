@@ -1,3 +1,6 @@
+import { isTouchDevice } from '../app/device';
+import { createTouchControls, type TouchControls } from './touchControls';
+
 export interface InputAxes {
   /** WASD: +1 forward (world -Z), -1 back. */
   moveForward: number;
@@ -22,6 +25,12 @@ export interface InputSystem {
   /** Mouse delta since last call. Accumulates only while free-look is held. */
   consumeLookDelta(): { dx: number; dy: number };
   consumeRestart(): boolean;
+  /**
+   * Queue a restart from outside the input system (e.g. a tap-to-
+   * restart button on game-over for touch devices, where there's no
+   * `R` key to press). Consumed by `consumeRestart()` next frame.
+   */
+  queueRestart(): void;
   /**
    * Returns `true` once per Space / Enter press, consuming the queued
    * event. The HUD uses this to toggle the instructions panel. Both
@@ -52,6 +61,14 @@ export function createInputSystem(canvas: HTMLCanvasElement): InputSystem {
   const markEngaged = () => {
     engaged = true;
   };
+
+  // Touch controls are opt-in per device. On desktop this is `null` so
+  // the entire rest of this file behaves exactly as before. On touch
+  // it's the two-joystick rig, wired to the same axes via `update()`
+  // below.
+  const touch: TouchControls | null = createTouchControls();
+  touch?.onEngage(markEngaged);
+  const isTouch = touch !== null;
 
   const onKeyDown = (e: KeyboardEvent) => {
     const k = e.key.toLowerCase();
@@ -138,10 +155,19 @@ export function createInputSystem(canvas: HTMLCanvasElement): InputSystem {
 
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
-  canvas.addEventListener('pointerdown', onPointerDown);
-  window.addEventListener('pointerup', onPointerUp);
-  window.addEventListener('pointermove', onPointerMove);
-  window.addEventListener('pointercancel', onPointerCancel);
+  // Free-look (hold LMB to orbit) is a desktop affordance. On touch
+  // devices the camera stays auto-follow — the thumbs are already
+  // reserved for move + balance, and capturing the canvas for a third
+  // "drag to look" gesture would collide with both joysticks. Skipping
+  // the canvas pointerdown listener entirely on touch is the simplest
+  // way to avoid accidental free-look triggers when a finger lands
+  // outside either zone (e.g., above the sticks on the playfield).
+  if (!isTouch) {
+    canvas.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointercancel', onPointerCancel);
+  }
   window.addEventListener('blur', onBlur);
 
   return {
@@ -153,13 +179,33 @@ export function createInputSystem(canvas: HTMLCanvasElement): InputSystem {
       return engaged;
     },
     update() {
-      axes.moveForward =
-        (keys.has('w') ? 1 : 0) - (keys.has('s') ? 1 : 0);
-      axes.moveRight = (keys.has('d') ? 1 : 0) - (keys.has('a') ? 1 : 0);
-      axes.tiltForward =
+      // Keyboard first — zero unless a key is held.
+      let moveF = (keys.has('w') ? 1 : 0) - (keys.has('s') ? 1 : 0);
+      let moveR = (keys.has('d') ? 1 : 0) - (keys.has('a') ? 1 : 0);
+      let tiltF =
         (keys.has('arrowup') ? 1 : 0) - (keys.has('arrowdown') ? 1 : 0);
-      axes.tiltRight =
+      let tiltR =
         (keys.has('arrowright') ? 1 : 0) - (keys.has('arrowleft') ? 1 : 0);
+      // Touch override: if a stick is actively captured, its values
+      // win — even when the normalised output is 0 inside the dead
+      // zone. That way a player who has rested their thumb on the
+      // stick but isn't pushing gets a clean zero, rather than
+      // inheriting a stale WASD read from a Bluetooth keyboard that
+      // happens to share the device.
+      if (touch) {
+        if (touch.left.active) {
+          moveF = touch.left.y;
+          moveR = touch.left.x;
+        }
+        if (touch.right.active) {
+          tiltF = touch.right.y;
+          tiltR = touch.right.x;
+        }
+      }
+      axes.moveForward = moveF;
+      axes.moveRight = moveR;
+      axes.tiltForward = tiltF;
+      axes.tiltRight = tiltR;
     },
     consumeLookDelta() {
       const result = { dx: lookDx, dy: lookDy };
@@ -174,6 +220,9 @@ export function createInputSystem(canvas: HTMLCanvasElement): InputSystem {
       }
       return false;
     },
+    queueRestart() {
+      restartQueued = true;
+    },
     consumeToggleHelp() {
       if (toggleHelpQueued) {
         toggleHelpQueued = false;
@@ -184,11 +233,14 @@ export function createInputSystem(canvas: HTMLCanvasElement): InputSystem {
     dispose() {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
-      canvas.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('pointerup', onPointerUp);
-      window.removeEventListener('pointermove', onPointerMove);
-      window.removeEventListener('pointercancel', onPointerCancel);
+      if (!isTouch) {
+        canvas.removeEventListener('pointerdown', onPointerDown);
+        window.removeEventListener('pointerup', onPointerUp);
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointercancel', onPointerCancel);
+      }
       window.removeEventListener('blur', onBlur);
+      touch?.dispose();
     },
   };
 }
