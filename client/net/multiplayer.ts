@@ -109,7 +109,7 @@ export interface RoundEvents {
 const DEFAULT_ENDPOINT = 'ws://localhost:2567';
 const ROOM_NAME = 'milk-dreams';
 const SEND_INTERVAL_MS = 1000 / 20; // 20 Hz
-const CONNECT_TIMEOUT_MS = 2500;
+const CONNECT_TIMEOUT_MS = 5_000;
 
 export interface PoseSample {
   x: number;
@@ -302,18 +302,29 @@ export async function connectMultiplayer(
 
   setStatus('connecting');
 
+  let joinPromise: Promise<Room> | null = null;
+  let didTimeout = false;
   try {
     const client = new Client(endpoint);
+    joinPromise = client.joinOrCreate(ROOM_NAME, { name });
     room = await Promise.race<Room>([
-      client.joinOrCreate(ROOM_NAME, { name }),
+      joinPromise,
       new Promise<Room>((_, rej) =>
         setTimeout(
-          () => rej(new Error('connect timeout')),
+          () => {
+            didTimeout = true;
+            rej(new Error('connect timeout'));
+          },
           CONNECT_TIMEOUT_MS,
         ),
       ),
     ]);
   } catch (err) {
+    if (didTimeout && joinPromise) {
+      void joinPromise
+        .then((lateRoom) => lateRoom.leave())
+        .catch(() => {});
+    }
     console.warn(
       `[multiplayer] could not reach ${endpoint}: ${(err as Error).message}. Running in single-player.`,
     );

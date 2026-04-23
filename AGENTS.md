@@ -6,7 +6,7 @@ Operative memory for the project. Update when decisions change. Read this before
 
 ## Language (player-facing copy)
 
-**All in-game UI is English**: HTML `lang`, HUD labels, dream names (`progression.ts`), toasts, game-over messages, scoreboard, loading screen, and accessibility strings. Agent chat and Cursor **skills** may stay in Spanish; that does not change the product language.
+**All in-game UI is English**: HTML `lang`, HUD labels, dream names (`progression.ts`), toasts, game-over messages, scoreboard, loading screen, and accessibility strings. The Spanish verse inside the "Tale" panel is an intentional source quote from the fable, not product UI copy. Agent chat and Cursor **skills** may stay in Spanish; that does not change the product language.
 
 ## What this is
 
@@ -31,7 +31,9 @@ robust for casual internet play.
   must agree across client and server
 - No physics engine (no Rapier). Jug balance is still pure math in
   `client/game/jugBalance.ts`.
-- Desktop first. Gamepad and touch are explicitly out.
+- Desktop first. Touch support exists as an experimental/additive path
+  (`client/systems/touchControls.ts` + touch HUD affordances), but desktop
+  remains the design and tuning baseline. Gamepad is still out.
 
 ## Current game snapshot
 
@@ -39,6 +41,9 @@ robust for casual internet play.
   `W/S` move, `A/D` turn, arrow keys balance the jug, hold left mouse to
   free-look, `R` restart, `Space` / `Enter` toggle the instructions panel. There
   is **no pointer lock** anymore.
+- Touch controls are present for coarse-pointer devices: left virtual stick
+  moves/turns, right virtual stick balances the jug. Treat this as additive
+  support, not as the main product target.
 - Single-player remains fully playable offline. Multiplayer is opt-in and
   non-blocking: if the server is unreachable, the local game keeps running.
 - Dream progression is real now: different dreams, different jug scales,
@@ -56,7 +61,9 @@ robust for casual internet play.
 ## Still out of scope
 
 - Real physics / fluid simulation / Rapier
-- Mobile / touch / gamepad support
+- Gamepad support
+- Mobile/touch as a primary design target; existing touch controls are
+  opportunistic and should not drive core tuning unless that decision changes
 - Authentication / accounts
 - Serious anti-cheat beyond the current casual-friends threat model
 - Matchmaking / lobbies / private-room productisation
@@ -86,6 +93,7 @@ lechera/
       levelEditor.ts   (browser level editor, enabled with `?editor=1`)
     systems/
       input.ts         (desktop controls, hold-to-look, R restart)
+      touchControls.ts (experimental coarse-pointer virtual sticks)
     game/
       level.ts         (authored meadow, obstacles, spawn, goal, path meshes)
       levelDefinition.ts
