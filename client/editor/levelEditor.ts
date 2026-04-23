@@ -83,6 +83,7 @@ interface EditorUi {
   addKindField: HTMLElement;
   addKindSelect: HTMLSelectElement;
   addButton: HTMLButtonElement;
+  newPathButton: HTMLButtonElement;
   deleteButton: HTMLButtonElement;
   saveButton: HTMLButtonElement;
   saveStatus: HTMLElement;
@@ -128,7 +129,7 @@ const MODE_HINTS: Record<EditorMode, string> = {
   props: 'Arrows move (snap 0.5 m), ring rotates (snap 15°). Hold Shift for free motion.',
   billboards: 'Arrows move, ring rotates. Hold Shift for free motion. Tweet index below.',
   paving:
-    'Drag a paving point to move it (snap 0.5 m). Add inserts a point after the selected one.',
+    'Drag a point to move it (snap 0.5 m). + Add point adds after the selected one. + New path starts a separate track.',
   boundary:
     'Drag the centre dot to reposition the world boundary. Radius is in Advanced.',
 };
@@ -191,6 +192,7 @@ function makeUi(root: HTMLElement): EditorUi {
         </label>
         <div class="level-editor__row">
           <button id="level-editor-add" type="button">+ Add</button>
+          <button id="level-editor-new-path" type="button" hidden>+ New path</button>
           <button id="level-editor-delete" type="button">Delete</button>
         </div>
       </div>
@@ -256,6 +258,7 @@ function makeUi(root: HTMLElement): EditorUi {
     addKindField: query('#level-editor-add-kind-field'),
     addKindSelect: query('#level-editor-add-kind'),
     addButton: query('#level-editor-add'),
+    newPathButton: query('#level-editor-new-path'),
     deleteButton: query('#level-editor-delete'),
     saveButton: query('#level-editor-save'),
     saveStatus: query('#level-editor-save-status'),
@@ -1206,8 +1209,47 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
       selected?.kind === 'prop';
     ui.addButton.disabled = !modeCanAdd;
     ui.addButton.textContent = ADD_LABELS[currentMode] || '+ Add';
+    const paving = currentMode === 'paving';
+    ui.newPathButton.hidden = !paving;
+    ui.newPathButton.disabled = !paving;
     ui.deleteButton.disabled = !canDelete;
     refreshAddKindPicker();
+  }
+
+  function applyNewPavedPathAction() {
+    if (currentMode !== 'paving') return;
+    const template = definition.pavedPaths[0];
+    const width = template?.width ?? 1.5;
+    const yLift = template?.yLift ?? 0.04;
+    let x0 = 0;
+    let z0 = 0;
+    if (selected?.kind === 'paved-path-point') {
+      const wp =
+        definition.pavedPaths[selected.pathIndex]?.waypoints[selected.pointIndex] ?? null;
+      if (wp) {
+        x0 = wp.x;
+        z0 = wp.z;
+      }
+    } else if (definition.pavedPaths.length > 0) {
+      const lastPath = definition.pavedPaths[definition.pavedPaths.length - 1]!;
+      const lastWp = lastPath.waypoints[lastPath.waypoints.length - 1] ?? { x: 0, z: 0 };
+      x0 = lastWp.x + 2;
+      z0 = lastWp.z;
+    }
+    definition.pavedPaths.push({
+      width,
+      yLift,
+      waypoints: [
+        { x: x0, z: z0 },
+        { x: x0 + 2, z: z0 },
+      ],
+    });
+    const pathIndex = definition.pavedPaths.length - 1;
+    const nextSelection: Selection = { kind: 'paved-path-point', pathIndex, pointIndex: 0 };
+    syncFieldsFromDefinition();
+    selected = nextSelection;
+    rebuildHelpers();
+    void requestPreviewBuild();
   }
 
   function applyAddAction() {
@@ -1361,6 +1403,7 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
     updateActionButtons();
   });
   ui.addButton.addEventListener('click', applyAddAction);
+  ui.newPathButton.addEventListener('click', applyNewPavedPathAction);
   ui.deleteButton.addEventListener('click', applyDeleteAction);
   ui.saveButton.addEventListener('click', () => {
     void saveToServer();

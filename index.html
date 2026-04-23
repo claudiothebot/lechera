@@ -328,9 +328,10 @@
 
             <div class="instructions-diagram" aria-hidden="true">
               <!--
-                Figure on the left; both control clusters stack on the right
-                (balance on top, move below). kbd / touch hidden via
-                `body.is-touch` the same as before.
+                Figure on the left; desktop: arrows (balance) upper to align
+                with the jar, WASD (move) lower to align with the feet. Touch:
+                two-column row for bottom-left / bottom-right thumb pads, with
+                distinct ring colours.
               -->
               <div class="instructions-diagram__figure">
                 <canvas
@@ -354,22 +355,6 @@
                   <div class="instructions-diagram__caption">Balance the jug</div>
                 </div>
                 <div
-                  class="instructions-diagram__side instructions-diagram__side--jug instructions-diagram__side--touch"
-                >
-                  <svg
-                    class="instructions-joystick"
-                    viewBox="0 0 120 120"
-                    xmlns="http://www.w3.org/2000/svg"
-                    aria-hidden="true"
-                  >
-                    <circle cx="60" cy="60" r="48" fill="rgba(10,10,18,0.42)" stroke="rgba(247,244,236,0.4)" stroke-width="2" />
-                    <circle cx="60" cy="60" r="36" fill="none" stroke="rgba(247,244,236,0.18)" stroke-width="1" stroke-dasharray="3 4" />
-                    <circle cx="72" cy="52" r="20" fill="rgba(241,210,141,0.85)" stroke="rgba(255,255,255,0.55)" stroke-width="1.6" />
-                    <path d="M60 22 L60 14 M60 98 L60 106 M22 60 L14 60 M98 60 L106 60" stroke="rgba(247,244,236,0.55)" stroke-width="2" stroke-linecap="round" />
-                  </svg>
-                  <div class="instructions-diagram__caption">Balance the jug</div>
-                </div>
-                <div
                   class="instructions-diagram__side instructions-diagram__side--wasd instructions-diagram__side--kbd"
                 >
                   <div class="instructions-keys instructions-keys--cross">
@@ -380,28 +365,42 @@
                   </div>
                   <div class="instructions-diagram__caption">Move the milkmaid</div>
                 </div>
-                <div
-                  class="instructions-diagram__side instructions-diagram__side--wasd instructions-diagram__side--touch"
-                >
-                  <svg
-                    class="instructions-joystick"
-                    viewBox="0 0 120 120"
-                    xmlns="http://www.w3.org/2000/svg"
-                    aria-hidden="true"
-                  >
-                    <circle cx="60" cy="60" r="48" fill="rgba(10,10,18,0.42)" stroke="rgba(247,244,236,0.4)" stroke-width="2" />
-                    <circle cx="60" cy="60" r="36" fill="none" stroke="rgba(247,244,236,0.18)" stroke-width="1" stroke-dasharray="3 4" />
-                    <circle cx="52" cy="44" r="20" fill="rgba(241,210,141,0.85)" stroke="rgba(255,255,255,0.55)" stroke-width="1.6" />
-                    <path d="M60 22 L60 14 M60 98 L60 106 M22 60 L14 60 M98 60 L106 60" stroke="rgba(247,244,236,0.55)" stroke-width="2" stroke-linecap="round" />
-                  </svg>
-                  <div class="instructions-diagram__caption">Move the milkmaid</div>
+                <div class="instructions-diagram__touch-pair" aria-hidden="true">
+                  <div class="instructions-touch-cell">
+                    <p class="instructions-diagram__placement">Bottom-left</p>
+                    <p class="instructions-touch-cell__tag">Move</p>
+                    <svg
+                      class="instructions-joystick instructions-joystick--left"
+                      viewBox="0 0 120 120"
+                      xmlns="http://www.w3.org/2000/svg"
+                      aria-hidden="true"
+                    >
+                      <circle cx="60" cy="60" r="48" fill="rgba(10,10,18,0.42)" stroke="rgba(150,200,255,0.55)" stroke-width="2" />
+                      <circle cx="60" cy="60" r="36" fill="none" stroke="rgba(150,200,255,0.2)" stroke-width="1" stroke-dasharray="3 4" />
+                      <circle cx="52" cy="44" r="20" fill="rgba(241,210,141,0.85)" stroke="rgba(255,255,255,0.55)" stroke-width="1.6" />
+                      <path d="M60 22 L60 14 M60 98 L60 106 M22 60 L14 60 M98 60 L106 60" stroke="rgba(150,200,255,0.55)" stroke-width="2" stroke-linecap="round" />
+                    </svg>
+                    <div class="instructions-diagram__caption">Walk and turn</div>
+                  </div>
+                  <div class="instructions-touch-cell">
+                    <p class="instructions-diagram__placement">Bottom-right</p>
+                    <p class="instructions-touch-cell__tag">Balance</p>
+                    <svg
+                      class="instructions-joystick instructions-joystick--right"
+                      viewBox="0 0 120 120"
+                      xmlns="http://www.w3.org/2000/svg"
+                      aria-hidden="true"
+                    >
+                      <circle cx="60" cy="60" r="48" fill="rgba(10,10,18,0.42)" stroke="rgba(255,200,130,0.6)" stroke-width="2" />
+                      <circle cx="60" cy="60" r="36" fill="none" stroke="rgba(255,200,130,0.22)" stroke-width="1" stroke-dasharray="3 4" />
+                      <circle cx="72" cy="52" r="20" fill="rgba(241,210,141,0.85)" stroke="rgba(255,255,255,0.55)" stroke-width="1.6" />
+                      <path d="M60 22 L60 14 M60 98 L60 106 M22 60 L14 60 M98 60 L106 60" stroke="rgba(255,210,150,0.6)" stroke-width="2" stroke-linecap="round" />
+                    </svg>
+                    <div class="instructions-diagram__caption">Tilt the jug</div>
+                  </div>
                 </div>
               </div>
             </div>
-
-            <p class="instructions-touch-hint" aria-hidden="true">
-              Tap the milkmaid icon to close. The two thumb zones at the bottom of the screen control movement and balance.
-            </p>
 
             <ul class="instructions-list instructions-list--kbd">
               <li>

@@ -1,8 +1,8 @@
 /**
- * First-run “live” coaching for desktop: short tips that advance when the
- * player actually moves, uses balance input, then sees a short goal HUD
- * hint. UI-only — gameplay does not read this module. Completion is
- * in-memory only (refresh starts the coach over).
+ * First-run “live” coaching: short tips that advance when the player
+ * actually moves, uses balance input, then sees a short goal HUD hint.
+ * Desktop: WASD + arrows. Touch: left / right on-screen thumb pads. UI-only.
+ * Completion is in-memory only (refresh starts the coach over).
  */
 const MOVE_SPEED_THRESHOLD = 0.2;
 /**
@@ -18,7 +18,9 @@ const STEP3_MAX_ACTIVE_SEC = 11;
 
 const lines = {
   move: 'W / S walk · A / D turn — try it now',
+  moveTouch: 'Drag left to move',
   balance: 'Use the arrow keys to keep the milk from spilling',
+  balanceTouch: 'Drag right to balance',
   goalWithMinimap: 'Follow your dream on the radar',
   goalNoMinimap: 'Follow the glowing marker toward your dream',
 } as const;
@@ -26,6 +28,8 @@ const lines = {
 export type FirstRunCoachVisual =
   | 'move'
   | 'arrows'
+  | 'touchMove'
+  | 'touchBalance'
   | 'dreamhud'
   /** Minimap off — only the dream preview appears top-right. */
   | 'dreamonly'
@@ -92,21 +96,26 @@ const hidden: FirstRunCoachView = { text: null, visual: 'none' };
  */
 export function updateFirstRunCoach(ctx: FirstRunCoachContext): FirstRunCoachView {
   if (!ctx.active) return hidden;
-  if (!ctx.isDesktop) return hidden;
   if (finished) return hidden;
+
+  const touch = !ctx.isDesktop;
 
   if (ctx.playerSpeed > MOVE_SPEED_THRESHOLD) state.move = true;
   if (ctx.balanceInput > 0.02) state.balance = true;
 
   if (!state.move) {
     if (!ctx.blocked) {
-      return { text: lines.move, visual: 'move' };
+      return touch
+        ? { text: lines.moveTouch, visual: 'touchMove' }
+        : { text: lines.move, visual: 'move' };
     }
     return hidden;
   }
   if (!state.balance) {
     if (!ctx.blocked) {
-      return { text: lines.balance, visual: 'arrows' };
+      return touch
+        ? { text: lines.balanceTouch, visual: 'touchBalance' }
+        : { text: lines.balance, visual: 'arrows' };
     }
     return hidden;
   }

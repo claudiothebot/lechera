@@ -49,6 +49,16 @@ function persistName(name: string): void {
   }
 }
 
+/** Same storage as the welcome modal — used by the HUD inline rename. */
+export function getPlayerDisplayNameFromCache(): string | null {
+  return loadCachedName();
+}
+
+/** Call only with a string already accepted by `sanitiseName`. */
+export function persistSanitisedPlayerName(name: string): void {
+  persistName(name);
+}
+
 /**
  * Show the modal and resolve with the chosen name. The promise only
  * resolves when the player submits a value that passes

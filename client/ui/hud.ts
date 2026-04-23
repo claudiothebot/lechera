@@ -7,8 +7,14 @@
  * On 'spilled'/'timeout' the HUD shows a final summary with total litres
  * delivered and the dream the player was chasing when it ended.
  */
-import { countryCodeToFlagEmojiOrUn } from '@milk-dreams/shared';
+import {
+  countryCodeToFlagEmojiOrUn,
+  MAX_NAME_LENGTH,
+  MIN_NAME_LENGTH,
+  sanitiseName,
+} from '@milk-dreams/shared';
 import type { FirstRunCoachView } from './firstRunCoach';
+import { getPlayerDisplayNameFromCache } from './nameModal';
 
 export type GameStatus = 'playing' | 'spilled' | 'timeout';
 
@@ -255,6 +261,11 @@ export interface HudOptions {
    * `restart()` in main.ts.
    */
   onRestartClick?: () => void;
+  /**
+   * When the player renames from the net badge (click → inline edit).
+   * Receives a value that already passed `sanitiseName`.
+   */
+  onHudPlayerNameCommit?: (sanitisedName: string) => void;
 }
 
 export function createHud(options: HudOptions = {}): Hud {
@@ -289,6 +300,7 @@ export function createHud(options: HudOptions = {}): Hud {
   const netBadge = document.querySelector<HTMLElement>('#net-badge')!;
   const netBadgeFlag = netBadge.querySelector<HTMLElement>('.net-badge__flag')!;
   const netBadgeText = netBadge.querySelector<HTMLElement>('.net-badge__text')!;
+  let nameFieldEditing = false;
   const scoreboard = document.querySelector<HTMLElement>('#scoreboard')!;
   const scoreboardTitle =
     document.querySelector<HTMLElement>('#scoreboard-title')!;
@@ -762,6 +774,7 @@ export function createHud(options: HudOptions = {}): Hud {
   };
 
   const setNetStatus: Hud['setNetStatus'] = (status, selfName, selfHue, selfCountry) => {
+    if (nameFieldEditing) return;
     const hue = selfHue ?? null;
     const countryKey =
       status === 'online' && typeof selfCountry === 'string' && selfCountry.trim()
@@ -788,8 +801,11 @@ export function createHud(options: HudOptions = {}): Hud {
     netBadge.classList.add(`net-badge--${status}`);
     switch (status) {
       case 'idle':
-        netBadgeText.textContent = 'Local';
+      case 'offline': {
+        const cached = getPlayerDisplayNameFromCache();
+        netBadgeText.textContent = cached && cached.length > 0 ? cached : 'Local';
         break;
+      }
       case 'connecting':
         netBadgeText.textContent = 'Connecting…';
         break;
@@ -797,9 +813,6 @@ export function createHud(options: HudOptions = {}): Hud {
         netBadgeText.textContent = selfName?.trim()
           ? selfName.trim()
           : 'Player';
-        break;
-      case 'offline':
-        netBadgeText.textContent = 'Local';
         break;
     }
     // Phase 7 — flag beside the dot when online; real country or UN 🇺🇳
@@ -943,6 +956,24 @@ export function createHud(options: HudOptions = {}): Hud {
   <kbd class="kbd kbd--arrow kbd--right">→</kbd>
 </div>`;
   /** Minimap cue only (matches the circular radar — no second “panel” icon). */
+  const COACH_TOUCH_LEFT = `<div class="hud-coach__touch-cue" aria-hidden="true">
+  <span class="hud-coach__touch-cue-label hud-coach__touch-cue-label--left">Left · Move</span>
+  <svg class="hud-coach__touch-cue-dial" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="60" cy="60" r="48" fill="rgba(10,10,18,0.42)" stroke="rgba(150, 200, 255, 0.55)" stroke-width="2" />
+    <circle cx="60" cy="60" r="36" fill="none" stroke="rgba(150, 200, 255, 0.22)" stroke-width="1" stroke-dasharray="3 4" />
+    <circle cx="52" cy="44" r="20" fill="rgba(241,210,141,0.85)" stroke="rgba(255,255,255,0.55)" stroke-width="1.6" />
+    <path d="M60 22 L60 14 M60 98 L60 106 M22 60 L14 60 M98 60 L106 60" stroke="rgba(180, 215, 255, 0.6)" stroke-width="2" stroke-linecap="round" />
+  </svg>
+</div>`;
+  const COACH_TOUCH_RIGHT = `<div class="hud-coach__touch-cue" aria-hidden="true">
+  <span class="hud-coach__touch-cue-label hud-coach__touch-cue-label--right">Right · Balance</span>
+  <svg class="hud-coach__touch-cue-dial" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="60" cy="60" r="48" fill="rgba(10,10,18,0.42)" stroke="rgba(255, 200, 130, 0.55)" stroke-width="2" />
+    <circle cx="60" cy="60" r="36" fill="none" stroke="rgba(255, 200, 130, 0.2)" stroke-width="1" stroke-dasharray="3 4" />
+    <circle cx="72" cy="52" r="20" fill="rgba(241,210,141,0.85)" stroke="rgba(255,255,255,0.55)" stroke-width="1.6" />
+    <path d="M60 22 L60 14 M60 98 L60 106 M22 60 L14 60 M98 60 L106 60" stroke="rgba(255, 210, 150, 0.55)" stroke-width="2" stroke-linecap="round" />
+  </svg>
+</div>`;
   const COACH_RADAR_MINI = `<div class="hud-coach__hud-mini hud-coach__hud-mini--radar" aria-hidden="true">
   <svg class="hud-coach__hud-mini-radar" viewBox="0 0 44 44" width="40" height="40" xmlns="http://www.w3.org/2000/svg">
     <circle cx="22" cy="22" r="20.5" fill="rgba(205, 190, 160, 0.08)" stroke="rgba(247, 244, 236, 0.35)" stroke-width="1" />
@@ -968,15 +999,25 @@ export function createHud(options: HudOptions = {}): Hud {
       firstRunCoach.setAttribute('aria-hidden', 'true');
       firstRunCoachText.textContent = '';
       firstRunCoachKeys.innerHTML = '';
+      firstRunCoach.classList.remove('hud-coach--one-line');
       return;
     }
     firstRunCoach.removeAttribute('hidden');
     firstRunCoach.setAttribute('aria-hidden', 'false');
     firstRunCoachText.textContent = view.text;
+    if (view.visual === 'touchMove' || view.visual === 'touchBalance') {
+      firstRunCoach.classList.add('hud-coach--one-line');
+    } else {
+      firstRunCoach.classList.remove('hud-coach--one-line');
+    }
     if (view.visual === 'move') {
       firstRunCoachKeys.innerHTML = COACH_KEYS_MOVE;
     } else if (view.visual === 'arrows') {
       firstRunCoachKeys.innerHTML = COACH_KEYS_ARROWS;
+    } else if (view.visual === 'touchMove') {
+      firstRunCoachKeys.innerHTML = COACH_TOUCH_LEFT;
+    } else if (view.visual === 'touchBalance') {
+      firstRunCoachKeys.innerHTML = COACH_TOUCH_RIGHT;
     } else if (view.visual === 'dreamhud') {
       firstRunCoachKeys.innerHTML = COACH_RADAR_MINI;
     } else if (view.visual === 'dreamonly') {
@@ -1047,6 +1088,82 @@ export function createHud(options: HudOptions = {}): Hud {
       leaderboardList.appendChild(li);
     }
   };
+
+  if (options.onHudPlayerNameCommit) {
+    netBadge.classList.add('net-badge--interactive');
+    netBadge.tabIndex = 0;
+    netBadge.setAttribute('role', 'button');
+    netBadge.title = 'Click to change name';
+    netBadge.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (nameFieldEditing) return;
+      if (!lastNetStatus || lastNetStatus === 'connecting') return;
+      nameFieldEditing = true;
+      const input = document.createElement('input');
+      input.className = 'net-badge__name-input';
+      input.setAttribute('aria-label', 'Display name');
+      input.maxLength = MAX_NAME_LENGTH;
+      input.spellcheck = false;
+      input.setAttribute('autocapitalize', 'off');
+      input.setAttribute('autocorrect', 'off');
+      input.value =
+        (lastNetName && lastNetName.trim()) || getPlayerDisplayNameFromCache() || '';
+      input.placeholder = 'Your name';
+      netBadgeText.classList.add('net-badge__text--editing');
+      netBadge.appendChild(input);
+      requestAnimationFrame(() => {
+        input.focus();
+        input.select();
+      });
+      let ignoreBlur = false;
+      const finish = (apply: boolean) => {
+        if (!nameFieldEditing) return;
+        const raw = input.value;
+        input.remove();
+        netBadgeText.classList.remove('net-badge__text--editing');
+        nameFieldEditing = false;
+        if (!apply) {
+          setNetStatus(lastNetStatus!, lastNetName, lastNetHue, lastNetCountry);
+          return;
+        }
+        const s = sanitiseName(raw);
+        if (s === null) {
+          showToast(
+            `Name must be ${MIN_NAME_LENGTH}-${MAX_NAME_LENGTH} characters.`,
+            2800,
+            { tone: 'warn' },
+          );
+          setNetStatus(lastNetStatus!, lastNetName, lastNetHue, lastNetCountry);
+          return;
+        }
+        options.onHudPlayerNameCommit!(s);
+      };
+      input.addEventListener('blur', () => {
+        if (ignoreBlur) {
+          ignoreBlur = false;
+          return;
+        }
+        finish(true);
+      });
+      input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          void input.blur();
+        } else if (ev.key === 'Escape') {
+          ev.preventDefault();
+          ignoreBlur = true;
+          finish(false);
+        }
+      });
+    });
+    netBadge.addEventListener('keydown', (e) => {
+      if (nameFieldEditing) return;
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        netBadge.click();
+      }
+    });
+  }
 
   return {
     setBalance,

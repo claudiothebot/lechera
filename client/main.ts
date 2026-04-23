@@ -48,6 +48,7 @@ import { installMusicLoop } from './audio/music';
 import {
   connectMultiplayer,
   OFFLINE_MULTIPLAYER_HANDLE,
+  type ConnectionStatus,
   type MultiplayerHandle,
   type RemotePlayerView,
 } from './net/multiplayer';
@@ -58,7 +59,7 @@ import {
   type LeaderboardEntry,
 } from './net/leaderboard';
 import type { AllTimeEntry, ProclamationView, ScoreboardEntry } from './ui/hud';
-import { getOrAskPlayerName } from './ui/nameModal';
+import { getOrAskPlayerName, persistSanitisedPlayerName } from './ui/nameModal';
 import {
   initFirstRunCoach,
   updateFirstRunCoach,
@@ -97,15 +98,23 @@ const DEBUG_INVINCIBLE = false;
  * the next dream in the chain kicks in. `obtained` is the dream we just
  * cashed in (for the "Got X" caption); `nextName` is what she's now
  * chasing — the main headline. Both are display-cased by CSS.
+ * Endless phase uses the title only as a mode label, so the caption skips
+ * "Now chasing" (no cash-framing copy).
  */
 function dreamProclamation(
   obtained: string,
   nextName: string,
   emoji: string | undefined,
 ): ProclamationView {
+  const caption =
+    nextName === 'Endless'
+      ? obtained === 'Endless'
+        ? undefined
+        : `Got ${obtained}`
+      : `Got ${obtained}  ·  Now chasing`;
   return {
     kind: 'dream',
-    caption: `Got ${obtained}  ·  Now chasing`,
+    caption,
     title: nextName,
     emoji,
   };
@@ -338,6 +347,7 @@ async function boot() {
   // `autoHidePending`, `leaderboardHttpEndpoint`); a click is only
   // possible after the DOM is live and the whole `boot()` body has
   // executed, so those bindings are always initialized by then.
+  let onHudNameCommit: (sanitised: string) => void = () => {};
   const hud = createHud({
     onInstructionsClick: () => {
       hud.toggleInstructions();
@@ -391,6 +401,9 @@ async function boot() {
     // the time the user can possibly click this button (round is over).
     onRestartClick: () => {
       restart();
+    },
+    onHudPlayerNameCommit: (sanitised) => {
+      onHudNameCommit(sanitised);
     },
   });
   hud.setDebugInvincible(DEBUG_INVINCIBLE);
@@ -779,24 +792,17 @@ async function boot() {
   // until the player enters a valid name (mandatory, min 3 chars).
   // The server uses the SAME validation, so any name accepted here is
   // accepted there.
-  void getOrAskPlayerName().then((chosenName) =>
-    connectMultiplayer({
-      name: chosenName,
-      onStatusChange: (status, name) => {
-        // Hue isn't known yet at the first fire (self schema hasn't
-        // hydrated). Once the self view lands, the
-        // `subscribeSelfProgression` hook below re-fires with the
-        // tint so the HUD name picks up the player's colour.
-        const self = multi.selfView();
-        hud.setNetStatus(
-          status,
-          name,
-          self?.colorHue ?? null,
-          countryForNetBadge(self),
-        );
-      },
-    }),
-  ).then((handle) => {
+  const onMpStatusChange = (status: ConnectionStatus, name: string | null) => {
+    const self = multi.selfView();
+    hud.setNetStatus(
+      status,
+      name,
+      self?.colorHue ?? null,
+      countryForNetBadge(self),
+    );
+  };
+
+  function attachMultiplayerHandle(handle: MultiplayerHandle) {
     multi = handle;
     const self0 = handle.selfView();
     hud.setNetStatus(
@@ -963,7 +969,36 @@ async function boot() {
         }
       },
     });
-  });
+  }
+
+  async function reconnectWithNewName(sanitised: string): Promise<void> {
+    persistSanitisedPlayerName(sanitised);
+    const endpoint = multi.endpoint() || undefined;
+    remotePlayers?.dispose();
+    remotePlayers = null;
+    serverProgressionLive = false;
+    serverRoundLive = false;
+    lastServerPhase = null;
+    multi.dispose();
+    multi = OFFLINE_MULTIPLAYER_HANDLE;
+    const handle = await connectMultiplayer({
+      name: sanitised,
+      endpoint,
+      onStatusChange: onMpStatusChange,
+    });
+    attachMultiplayerHandle(handle);
+  }
+
+  onHudNameCommit = (sanitised) => {
+    void reconnectWithNewName(sanitised);
+  };
+
+  void getOrAskPlayerName().then((chosenName) =>
+    connectMultiplayer({
+      name: chosenName,
+      onStatusChange: onMpStatusChange,
+    }),
+  ).then(attachMultiplayerHandle);
 
   renderer.setAnimationLoop(() => {
     const rawDt = clock.getDelta();
