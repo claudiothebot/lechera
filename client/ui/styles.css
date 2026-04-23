@@ -1115,8 +1115,8 @@ body.is-touch #message .message-sub--kbd {
 }
 
 /*
- * First-run coach line — above the "Space help" row (desktop) or above
- * thumb zones on touch (landscape; see mobile block below).
+ * First-run coach line — above the "Space help" row (desktop) or tucked
+ * under the top HUD on touch landscape (see mobile block below).
  */
 #hud-coach.hud-coach {
   position: absolute;
@@ -1958,36 +1958,6 @@ body.editor-active .story-panel {
   text-align: left;
 }
 
-.net-badge__text--editing {
-  display: none;
-}
-
-.net-badge__name-input {
-  min-width: 0;
-  max-width: 11rem;
-  width: 8rem;
-  font-family: var(--font-cheat);
-  font-size: clamp(0.88rem, 2.6vw, 1.08rem);
-  font-weight: 400;
-  letter-spacing: 0.05em;
-  padding: 0.1rem 0.25rem;
-  border-radius: 0.25rem;
-  border: 1px solid rgba(241, 210, 141, 0.5);
-  background: rgba(0, 0, 0, 0.35);
-  color: rgba(247, 244, 236, 0.95);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
-  outline: none;
-}
-
-.net-badge--idle .net-badge__name-input,
-.net-badge--offline .net-badge__name-input {
-  font-family: var(--font-mono);
-  font-size: 0.62rem;
-  font-weight: 500;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
 .net-badge--idle .net-badge__text,
 .net-badge--offline .net-badge__text {
   font-family: var(--font-mono);
@@ -2259,6 +2229,29 @@ body.editor-active .story-panel {
   flex-direction: column;
   gap: 0.7rem;
   margin-bottom: 0.9rem;
+}
+
+.name-modal__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.name-modal__cancel {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  padding: 0.45rem 0.5rem;
+  border: none;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.name-modal__cancel:hover {
+  color: var(--fg);
+  background: rgba(247, 244, 236, 0.06);
 }
 
 .name-modal__input {
@@ -3041,11 +3034,12 @@ body.editor-active .level-editor-root {
   }
 
   /*
-   * First-run coach: sit above the ~48vh thumb zones (see `.touch-zone`)
-   * so tips don’t sit under a thumb. Slightly smaller type for the strip.
+   * First-run coach: flush under `#hud-balance-center` (same top rule +
+   * ~bar + footer + tight gap) so it reads as one strip with the balance.
    */
   #hud-coach.hud-coach {
-    bottom: calc(48vh + 0.45rem);
+    bottom: auto;
+    top: max(2.55rem, calc(env(safe-area-inset-top) + 2.05rem));
     max-width: min(94vw, 22.5rem);
     padding: 0.3rem 0.55rem 0.4rem;
   }

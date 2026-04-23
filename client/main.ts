@@ -990,6 +990,8 @@ async function boot() {
   }
 
   onHudNameCommit = (sanitised) => {
+    const current = multi.selfName()?.trim() ?? '';
+    if (current !== '' && sanitised === current) return;
     void reconnectWithNewName(sanitised);
   };
 

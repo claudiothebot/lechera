@@ -128,7 +128,16 @@
               autocorrect="off"
               required
             />
-            <button class="name-modal__primary" type="submit" disabled>Start</button>
+            <div class="name-modal__actions">
+              <button class="name-modal__primary" type="submit" disabled>Start</button>
+              <button
+                type="button"
+                id="name-modal-cancel"
+                class="name-modal__cancel hidden"
+              >
+                Cancel
+              </button>
+            </div>
           </form>
           <p id="name-modal-error" class="name-modal__error" aria-live="polite"></p>
         </div>

@@ -49,7 +49,7 @@ function persistName(name: string): void {
   }
 }
 
-/** Same storage as the welcome modal — used by the HUD inline rename. */
+/** Same storage as the welcome modal — used when reading the badge label offline. */
 export function getPlayerDisplayNameFromCache(): string | null {
   return loadCachedName();
 }
@@ -59,29 +59,31 @@ export function persistSanitisedPlayerName(name: string): void {
   persistName(name);
 }
 
+type NameModalVariant = 'welcome' | 'rename';
+
 /**
- * Show the modal and resolve with the chosen name. The promise only
- * resolves when the player submits a value that passes
- * `sanitiseName`; there is no "skip" path. Reuses the modal's
- * existing DOM (declared in `index.html`) so we don't fight the
- * bundler over CSS-in-JS.
- *
- * If the modal DOM is missing for some reason (e.g. an exotic build
- * without `index.html`), the promise rejects so the caller knows
- * we can't enforce the contract — far better than silently letting
- * the player into multiplayer without a name.
+ * Opens the name modal (same DOM as first-run). `welcome` has no
+ * cancel path and resolves only after a valid submit. `rename` resolves
+ * `null` if the player cancels (button, Escape, or backdrop tap).
  */
-function promptForName(): Promise<string> {
+function openNameModal(
+  variant: NameModalVariant,
+  initialValue: string,
+): Promise<string | null> {
   const overlay = document.getElementById('name-modal');
   const form = document.getElementById('name-modal-form');
+  const titleEl = document.getElementById('name-modal-title');
   const input = document.getElementById('name-modal-input') as
     | HTMLInputElement
     | null;
   const submit = form?.querySelector<HTMLButtonElement>(
     'button[type="submit"]',
   );
+  const cancelBtn = document.getElementById(
+    'name-modal-cancel',
+  ) as HTMLButtonElement | null;
   const errorEl = document.getElementById('name-modal-error');
-  if (!overlay || !form || !input || !submit) {
+  if (!overlay || !form || !input || !submit || !titleEl) {
     return Promise.reject(
       new Error(
         'name-modal DOM is missing; cannot prompt the player for a name',
@@ -89,18 +91,30 @@ function promptForName(): Promise<string> {
     );
   }
 
+  const isRename = variant === 'rename';
+  titleEl.textContent = isRename ? 'Change your name' : "What's your name?";
+  submit.textContent = isRename ? 'Save' : 'Start';
+  if (cancelBtn) {
+    cancelBtn.classList.toggle('hidden', !isRename);
+    cancelBtn.hidden = !isRename;
+  }
+
   overlay.classList.remove('hidden');
   overlay.setAttribute('aria-hidden', 'false');
-  // Focus the input on next frame: doing it in the same microtask as
-  // a click handler that opened the overlay can swallow the focus
-  // because the click target hasn't lost focus yet.
-  requestAnimationFrame(() => input.focus());
-
-  // Initial state: empty input → submit disabled, no error visible.
-  submit.disabled = true;
+  input.value = initialValue;
   if (errorEl) errorEl.textContent = '';
 
-  return new Promise<string>((resolve) => {
+  return new Promise<string | null>((resolve) => {
+    let settled = false;
+    const finish = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      overlay.classList.add('hidden');
+      overlay.setAttribute('aria-hidden', 'true');
+      teardown();
+      resolve(value);
+    };
+
     const setError = (msg: string) => {
       if (!errorEl) return;
       errorEl.textContent = msg;
@@ -109,9 +123,6 @@ function promptForName(): Promise<string> {
     const onInput = () => {
       const valid = isValidName(input.value);
       submit.disabled = !valid;
-      // Don't surface "too short" while the user is still typing the
-      // first 1-2 characters — that's noisy. Only show it once the
-      // user has typed SOMETHING but it still isn't valid.
       if (input.value.trim().length === 0) {
         setError('');
       } else if (!valid) {
@@ -127,10 +138,6 @@ function promptForName(): Promise<string> {
       e.preventDefault();
       const cleaned = sanitiseName(input.value);
       if (cleaned === null) {
-        // Re-focus + visually shake to communicate "we need something
-        // valid". This branch is only reachable if the user mashes
-        // Enter past the disabled-button gate — the input event
-        // handler keeps it disabled until validation passes.
         input.focus();
         input.classList.add('name-modal__input--shake');
         setTimeout(
@@ -142,17 +149,63 @@ function promptForName(): Promise<string> {
         );
         return;
       }
-      overlay.classList.add('hidden');
-      overlay.setAttribute('aria-hidden', 'true');
-      form.removeEventListener('submit', onSubmit);
-      input.removeEventListener('input', onInput);
       persistName(cleaned);
-      resolve(cleaned);
+      finish(cleaned);
     };
 
+    const onCancel = () => {
+      if (!isRename) return;
+      finish(null);
+    };
+
+    const onOverlayPointerDown = (e: MouseEvent) => {
+      if (!isRename) return;
+      if (e.target === overlay) onCancel();
+    };
+
+    const onDocumentKeydown = (e: KeyboardEvent) => {
+      if (!isRename || e.key !== 'Escape') return;
+      e.preventDefault();
+      onCancel();
+    };
+
+    const teardown = () => {
+      form.removeEventListener('submit', onSubmit);
+      input.removeEventListener('input', onInput);
+      cancelBtn?.removeEventListener('click', onCancel);
+      overlay.removeEventListener('pointerdown', onOverlayPointerDown, true);
+      document.removeEventListener('keydown', onDocumentKeydown, true);
+    };
+
+    onInput();
     input.addEventListener('input', onInput);
     form.addEventListener('submit', onSubmit);
+    cancelBtn?.addEventListener('click', onCancel);
+    overlay.addEventListener('pointerdown', onOverlayPointerDown, true);
+    document.addEventListener('keydown', onDocumentKeydown, true);
+
+    requestAnimationFrame(() => input.focus());
   });
+}
+
+function promptForName(): Promise<string> {
+  return openNameModal('welcome', '').then((name) => {
+    if (name === null) {
+      return Promise.reject(
+        new Error('name modal closed without a name (welcome flow)'),
+      );
+    }
+    return name;
+  });
+}
+
+/**
+ * Re-show the first-run name UI with the current value prefilled.
+ * Resolves the new sanitised name after Save, or `null` if the player
+ * cancels — does not write to storage on cancel.
+ */
+export function promptPlayerNameEdit(initialDisplay: string): Promise<string | null> {
+  return openNameModal('rename', initialDisplay.trim());
 }
 
 /**

@@ -7,14 +7,12 @@
  * On 'spilled'/'timeout' the HUD shows a final summary with total litres
  * delivered and the dream the player was chasing when it ended.
  */
-import {
-  countryCodeToFlagEmojiOrUn,
-  MAX_NAME_LENGTH,
-  MIN_NAME_LENGTH,
-  sanitiseName,
-} from '@milk-dreams/shared';
+import { countryCodeToFlagEmojiOrUn } from '@milk-dreams/shared';
 import type { FirstRunCoachView } from './firstRunCoach';
-import { getPlayerDisplayNameFromCache } from './nameModal';
+import {
+  getPlayerDisplayNameFromCache,
+  promptPlayerNameEdit,
+} from './nameModal';
 
 export type GameStatus = 'playing' | 'spilled' | 'timeout';
 
@@ -262,8 +260,8 @@ export interface HudOptions {
    */
   onRestartClick?: () => void;
   /**
-   * When the player renames from the net badge (click → inline edit).
-   * Receives a value that already passed `sanitiseName`.
+   * When the player confirms a new name from the net badge (opens the
+   * same modal as first-run so mobile keyboards work reliably).
    */
   onHudPlayerNameCommit?: (sanitisedName: string) => void;
 }
@@ -300,7 +298,7 @@ export function createHud(options: HudOptions = {}): Hud {
   const netBadge = document.querySelector<HTMLElement>('#net-badge')!;
   const netBadgeFlag = netBadge.querySelector<HTMLElement>('.net-badge__flag')!;
   const netBadgeText = netBadge.querySelector<HTMLElement>('.net-badge__text')!;
-  let nameFieldEditing = false;
+  let nameRenameModalOpen = false;
   const scoreboard = document.querySelector<HTMLElement>('#scoreboard')!;
   const scoreboardTitle =
     document.querySelector<HTMLElement>('#scoreboard-title')!;
@@ -774,7 +772,7 @@ export function createHud(options: HudOptions = {}): Hud {
   };
 
   const setNetStatus: Hud['setNetStatus'] = (status, selfName, selfHue, selfCountry) => {
-    if (nameFieldEditing) return;
+    if (nameRenameModalOpen) return;
     const hue = selfHue ?? null;
     const countryKey =
       status === 'online' && typeof selfCountry === 'string' && selfCountry.trim()
@@ -1096,70 +1094,32 @@ export function createHud(options: HudOptions = {}): Hud {
     netBadge.title = 'Click to change name';
     netBadge.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (nameFieldEditing) return;
+      if (nameRenameModalOpen) return;
       if (!lastNetStatus || lastNetStatus === 'connecting') return;
-      nameFieldEditing = true;
-      const input = document.createElement('input');
-      input.className = 'net-badge__name-input';
-      input.setAttribute('aria-label', 'Display name');
-      input.maxLength = MAX_NAME_LENGTH;
-      input.spellcheck = false;
-      input.setAttribute('autocapitalize', 'off');
-      input.setAttribute('autocorrect', 'off');
-      input.value =
-        (lastNetName && lastNetName.trim()) || getPlayerDisplayNameFromCache() || '';
-      input.placeholder = 'Your name';
-      netBadgeText.classList.add('net-badge__text--editing');
-      netBadge.appendChild(input);
-      requestAnimationFrame(() => {
-        input.focus();
-        input.select();
-      });
-      let ignoreBlur = false;
-      const finish = (apply: boolean) => {
-        if (!nameFieldEditing) return;
-        const raw = input.value;
-        input.remove();
-        netBadgeText.classList.remove('net-badge__text--editing');
-        nameFieldEditing = false;
-        if (!apply) {
+      const initial =
+        (lastNetName && lastNetName.trim()) ||
+        getPlayerDisplayNameFromCache() ||
+        '';
+      nameRenameModalOpen = true;
+      void promptPlayerNameEdit(initial)
+        .then((next) => {
+          if (next !== null) {
+            options.onHudPlayerNameCommit!(next);
+          } else {
+            setNetStatus(lastNetStatus!, lastNetName, lastNetHue, lastNetCountry);
+          }
+        })
+        .catch(() => {
           setNetStatus(lastNetStatus!, lastNetName, lastNetHue, lastNetCountry);
-          return;
-        }
-        const s = sanitiseName(raw);
-        if (s === null) {
-          showToast(
-            `Name must be ${MIN_NAME_LENGTH}-${MAX_NAME_LENGTH} characters.`,
-            2800,
-            { tone: 'warn' },
-          );
-          setNetStatus(lastNetStatus!, lastNetName, lastNetHue, lastNetCountry);
-          return;
-        }
-        options.onHudPlayerNameCommit!(s);
-      };
-      input.addEventListener('blur', () => {
-        if (ignoreBlur) {
-          ignoreBlur = false;
-          return;
-        }
-        finish(true);
-      });
-      input.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter') {
-          ev.preventDefault();
-          void input.blur();
-        } else if (ev.key === 'Escape') {
-          ev.preventDefault();
-          ignoreBlur = true;
-          finish(false);
-        }
-      });
+        })
+        .finally(() => {
+          nameRenameModalOpen = false;
+        });
     });
-    netBadge.addEventListener('keydown', (e) => {
-      if (nameFieldEditing) return;
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
+    netBadge.addEventListener('keydown', (ev) => {
+      if (nameRenameModalOpen) return;
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
         netBadge.click();
       }
     });
