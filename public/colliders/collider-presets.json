@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "houses": {
+    "iberian-village": {
+      "footprintScaleXZ": 1,
+      "footprintScaleY": 1
+    },
+    "rustic-spanish": {
+      "footprintScaleXZ": 1,
+      "footprintScaleY": 1
+    },
+    "dairy-shed": {
+      "footprintScaleXZ": 1,
+      "footprintScaleY": 1
+    }
+  },
+  "trees": {
+    "olive": {
+      "trunkRadiusScale": 1
+    },
+    "poplar": {
+      "trunkRadiusScale": 0.29
+    },
+    "poplar-alt": {
+      "trunkRadiusScale": 0.31
+    }
+  },
+  "sceneryProps": {
+    "haystack": {
+      "footprintScaleXZ": 0.8,
+      "footprintScaleY": 1
+    },
+    "cart": {
+      "footprintScaleXZ": 0.8,
+      "footprintScaleY": 1
+    },
+    "well": {
+      "footprintScaleXZ": 0.8,
+      "footprintScaleY": 1
+    }
+  },
+  "tweetBillboard": {
+    "footprintScaleXZ": 1,
+    "footprintScaleY": 1
+  }
+}

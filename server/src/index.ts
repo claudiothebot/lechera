@@ -34,6 +34,13 @@ app.options('/dev/level', (_req, res) => {
   res.sendStatus(204);
 });
 
+app.options('/dev/collider-presets', (_req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(204);
+});
+
 // Tiny health check for hosting platforms; everything else is WS.
 app.get('/health', (_req, res) => {
   res.type('text/plain').send('ok');
@@ -96,6 +103,11 @@ const LEVEL_FILE_PATH = resolve(
   '../../public/levels/level-01.json',
 );
 
+const COLLIDER_PRESETS_FILE_PATH = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../public/colliders/collider-presets.json',
+);
+
 app.post(
   '/dev/level',
   express.json({ limit: '256kb' }),
@@ -116,6 +128,38 @@ app.post(
       res.json({ ok: true, path: LEVEL_FILE_PATH, bytes: pretty.length });
     } catch (err) {
       console.error('[dev-save] write failed', err);
+      res.status(500).json({ error: (err as Error).message });
+    }
+  },
+);
+
+/**
+ * Dev-only: level editor "Save" for global per-type collider scales.
+ * Writes `public/colliders/collider-presets.json`. Same production guard
+ * as `POST /dev/level`.
+ */
+app.post(
+  '/dev/collider-presets',
+  express.json({ limit: '128kb' }),
+  async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    if (IS_PRODUCTION) {
+      res.status(403).json({ error: 'disabled in production' });
+      return;
+    }
+    if (!req.body || typeof req.body !== 'object') {
+      res.status(400).json({ error: 'body must be a JSON object' });
+      return;
+    }
+    try {
+      const pretty = JSON.stringify(req.body, null, 2) + '\n';
+      await writeFile(COLLIDER_PRESETS_FILE_PATH, pretty, 'utf8');
+      console.log(
+        `[dev-save] wrote ${COLLIDER_PRESETS_FILE_PATH} (${pretty.length} B)`,
+      );
+      res.json({ ok: true, path: COLLIDER_PRESETS_FILE_PATH, bytes: pretty.length });
+    } catch (err) {
+      console.error('[dev-save] collider-presets write failed', err);
       res.status(500).json({ error: (err as Error).message });
     }
   },

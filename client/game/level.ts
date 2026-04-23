@@ -24,6 +24,12 @@ import {
 } from './treeModel';
 import type { InstancedTreePlacement, TreeModel } from './treeModel';
 import type { TreeVariantKind } from './levelDefinition';
+import {
+  getDefaultColliderPresets,
+  stampHouseObstacle,
+  stampTreeTrunkObstacle,
+  type ColliderPresets,
+} from './colliderPresets';
 
 export interface Level {
   definition: LevelDefinition;
@@ -71,6 +77,25 @@ export interface PathMesh {
   width: number;
 }
 
+/**
+ * Metadata for per-type collider scaling (`collider-presets.json`).
+ * Set when the obstacle is registered from a mesh or trunk formula; lets
+ * `reapplyAllColliderPresets` update AABBs without reloading GLBs.
+ */
+export interface ObstacleColliderTuning {
+  category: 'house' | 'tree' | 'scenery' | 'billboard';
+  /** `HouseVariantKind` | `TreeVariantKind` | `SceneryPropKind` | `tweet-billboard`. */
+  variant: string;
+  baseHalfX: number;
+  baseHalfZ: number;
+  baseHalfY: number;
+  /**
+   * World Y rotation (radians) for `category === 'house'`. Used to build a
+   * world XZ AABB of the local footprint, matching `Object3D.rotation.y`.
+   */
+  yaw?: number;
+}
+
 export interface Obstacle {
   /** World-space center on XZ plane. Y is center of the box. */
   center: THREE.Vector3;
@@ -79,6 +104,23 @@ export interface Obstacle {
   halfZ: number;
   /** Half height for visual only (collision is 2D on XZ). */
   halfY: number;
+  /**
+   * Present for world props loaded from type presets. Omitted for remote
+   * players, legacy shells, and anything without JSON tuning.
+   */
+  colliderTuning?: ObstacleColliderTuning;
+  /**
+   * When set, horizontal player collision with this house uses a **rotated**
+   * 2D footprint in XZ (circle vs OBB in the ground plane). `halfX` / `halfZ`
+   * remain a conservative world AABB for minimap / editor culling, not the
+   * contact shape.
+   */
+  houseFootprint2D?: {
+    localHalfX: number;
+    localHalfZ: number;
+    /** Radians, +Y, same as the placed mesh `rotation.y`. */
+    yaw: number;
+  };
   /**
    * Optional world-space horizontal velocity (m/s). Defaults to 0
    * (static obstacle). Used by the player collision to compute the
@@ -699,7 +741,7 @@ function applyGrassMacroVariation(material: THREE.MeshStandardMaterial): void {
             // Brightness modulation: darker in dips, brighter in highs.
             // Range chosen by eye — strong enough to mask tiling, mild
             // enough to not look blotchy under direct sunlight.
-            float brightness = mix(0.92, 3.15, macro);
+            float brightness = mix(0.92, 1.95, macro);
 
             // Tint swings between a slightly-warm cool-green and a more
             // yellow-green, pulled toward the reference palette.
@@ -760,7 +802,10 @@ function makeBox(
  * seamlessly once the GLBs resolve. Variants load in parallel so the
  * upgrade is a single pop, not a staggered cascade.
  */
-export async function loadLevelHouses(level: Level): Promise<void> {
+export async function loadLevelHouses(
+  level: Level,
+  colliderPresets: ColliderPresets = getDefaultColliderPresets(),
+): Promise<void> {
   const requestedVariants = level.definition.houseSlots.map((slot, i) =>
     resolveHouseVariant(slot, i),
   );
@@ -792,10 +837,13 @@ export async function loadLevelHouses(level: Level): Promise<void> {
     else mat?.dispose();
 
     obstacle.visual = instance;
-    obstacle.halfX = model.halfX;
-    obstacle.halfZ = model.halfZ;
-    obstacle.halfY = model.halfY;
-    obstacle.center.y = model.halfY;
+    stampHouseObstacle(
+      obstacle,
+      model,
+      variantKind,
+      colliderPresets,
+      slot?.yaw ?? 0,
+    );
   }
 }
 
@@ -819,6 +867,7 @@ export { loadLevelSceneryProps } from './sceneryProps';
 export async function loadLevelTrees(
   level: Level,
   _goals: ReadonlyArray<{ x: number; z: number }>,
+  colliderPresets: ColliderPresets = getDefaultColliderPresets(),
 ): Promise<void> {
   const placements = level.definition.trees;
   if (placements.length === 0) return;
@@ -894,13 +943,15 @@ export async function loadLevelTrees(
     const trunkR =
       TRUNK_COLLIDER_BASE * TREE_SCATTER_WORLD_SCALE * TREE_VARIANT_SCATTER_SCALE[variant];
     for (const p of chunkPlacements) {
-      newObstacles.push({
+      const ob: Obstacle = {
         center: new THREE.Vector3(p.x, model.halfY, p.z),
         halfX: trunkR,
         halfZ: trunkR,
         halfY: model.halfY,
         visual: instancedGroup,
-      });
+      };
+      stampTreeTrunkObstacle(ob, model, variant, trunkR, colliderPresets);
+      newObstacles.push(ob);
     }
   }
 

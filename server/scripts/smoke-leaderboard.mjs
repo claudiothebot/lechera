@@ -61,6 +61,14 @@ function spawnServer() {
         // Sub-second round so the whole test wraps in ~3s.
         MD_ROUND_MS: '1500',
         MD_SCOREBOARD_MS: '1500',
+        // The persistence layer now gates writes on NODE_ENV=production
+        // (so `pnpm dev:server` doesn't pollute the real leaderboard
+        // when the dev shell happens to have SUPABASE_* exported).
+        // The persistence-ON path of this smoke test EXISTS to exercise
+        // the production write path, so force it on here — the
+        // persistence-OFF path above still runs fine with SUPABASE_*
+        // empty regardless of NODE_ENV.
+        NODE_ENV: persistenceEnabled ? 'production' : (process.env.NODE_ENV ?? ''),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },

@@ -4,6 +4,7 @@ import {
   WORLD_BOUNDARY_RADIUS_M,
   type Obstacle,
 } from './level';
+import { applyCircleVsHouseOBB2D } from './obb2dPlayerCollision';
 
 /**
  * Half-width of the cylindrical body used for collision against world
@@ -226,6 +227,22 @@ export function createPlayer(scene: THREE.Scene, spawn: THREE.Vector3): Player {
 
     bumps.length = 0;
     for (const ob of obstacles) {
+      if (ob.houseFootprint2D) {
+        const p = applyCircleVsHouseOBB2D(
+          next.x,
+          next.z,
+          PLAYER_RADIUS,
+          ob,
+          ob.houseFootprint2D,
+          velocity,
+          bumps,
+          ob.velocityX ?? 0,
+          ob.velocityZ ?? 0,
+        );
+        next.x = p.x;
+        next.z = p.z;
+        continue;
+      }
       const dx = next.x - ob.center.x;
       const dz = next.z - ob.center.z;
       const clampedX = Math.max(-ob.halfX, Math.min(ob.halfX, dx));

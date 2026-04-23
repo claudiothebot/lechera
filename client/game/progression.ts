@@ -9,8 +9,9 @@ import type { AnimalKey } from './levelAnimals';
  * on the map and makes the jug harder (bigger, heavier, tips sooner).
  *
  * After the named dreams we enter an endless mode whose curve keeps
- * applying the same formulas, capped at safe maxima. A 3-minute timer
- * (owned by main.ts) eventually kills every run anyway.
+ * applying the same formulas, capped at safe maxima. The HUD names that
+ * phase as chasing cash (goal prop is always the money bag). A 3-minute
+ * timer (owned by main.ts) eventually kills every run anyway.
  */
 
 /**
@@ -135,7 +136,7 @@ function makeDream(index: number): DreamConfig {
   const cyclicIdx = index % NAMED_DREAMS.length;
   const name = NAMED_DREAMS[cyclicIdx]!;
   // Named progression cycles eggs→mansion; endless runs show a money bag
-  // at the goal while dream names still rotate for the subtitle.
+  // at the goal with a cash label (index % NAMED is only for difficulty curve).
   const animalKey = isEndless ? 'moneybag' : DREAM_ANIMALS[cyclicIdx]!;
 
   const goalXZ = DREAM_GOALS[index % DREAM_GOALS.length]!;
@@ -147,7 +148,10 @@ function makeDream(index: number): DreamConfig {
 
   return {
     index,
-    dreamName: isEndless ? `Endless · ${name}` : name,
+    // Past the named chain we're chasing the money bag — surfacing the
+    // cycled animal name (e.g. "Endless · Eggs") on top of a money-bag
+    // goal was confusing, so endless runs read simply as "Endless".
+    dreamName: isEndless ? 'Endless' : name,
     litres: index + 1,
     isEndless,
     goal,
@@ -155,6 +159,25 @@ function makeDream(index: number): DreamConfig {
     difficulty,
     animalKey,
   };
+}
+
+/** Emoji for the reward just obtained at this dream index (toast / HUD flair). */
+export function rewardEmojiForDreamIndex(index: number): string {
+  const safe = Math.max(0, Math.floor(index));
+  const isEndless = safe >= NAMED_DREAMS.length;
+  const cyclicIdx = safe % NAMED_DREAMS.length;
+  const key: AnimalKey = isEndless ? 'moneybag' : DREAM_ANIMALS[cyclicIdx]!;
+  const map: Record<AnimalKey, string> = {
+    eggs: '🥚',
+    chicken: '🐔',
+    pig: '🐷',
+    calf: '🐮',
+    cow: '🐄',
+    ferrari: '🏎️',
+    mansion: '🏰',
+    moneybag: '💰',
+  };
+  return map[key];
 }
 
 /**

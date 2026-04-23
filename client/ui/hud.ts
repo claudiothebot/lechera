@@ -8,8 +8,35 @@
  * delivered and the dream the player was chasing when it ended.
  */
 import { countryCodeToFlagEmojiOrUn } from '@milk-dreams/shared';
+import type { FirstRunCoachView } from './firstRunCoach';
 
 export type GameStatus = 'playing' | 'spilled' | 'timeout';
+
+export type ToastTone = 'default' | 'celebrate' | 'warn';
+
+export interface ToastOptions {
+  /** Optional leading emoji (reward face, spill cue, etc.). */
+  emoji?: string;
+  tone?: ToastTone;
+}
+
+/**
+ * Cinematic center-screen message (see `showProclamation`). Kept
+ * narrow on purpose: one short headline plus an optional one-line
+ * caption above it. Keep copy short — the Bungee face doesn't wrap
+ * gracefully past ~2 words per line.
+ */
+export type ProclamationKind = 'dream' | 'spill';
+
+export interface ProclamationView {
+  kind: ProclamationKind;
+  /** Small overline above the title (e.g. "CHASING", "OH NO"). */
+  caption?: string;
+  /** Main line — rendered in the display typeface. */
+  title: string;
+  /** Optional decorative emoji to the left of the title. */
+  emoji?: string;
+}
 
 /**
  * Multiplayer connection status, mirrored from `net/multiplayer.ts`.
@@ -127,7 +154,17 @@ export interface Hud {
   /** Match / session round index (server round online, local counter offline). */
   setRound(roundNumber: number): void;
   /** Transient message (fades after durationMs). */
-  showToast(text: string, durationMs?: number): void;
+  showToast(text: string, durationMs?: number, options?: ToastOptions): void;
+  /**
+   * Cinematic, center-screen proclamation used for dream advance / spill.
+   * Much louder than `showToast` (Bungee title, glow, pop-in animation)
+   * and intentionally NOT a card — it should feel like in-world signage,
+   * not a system notification.
+   */
+  showProclamation(
+    view: ProclamationView,
+    durationMs?: number,
+  ): void;
   /** Shows the invincibility line when `DEBUG_INVINCIBLE` is on. */
   setDebugInvincible(visible: boolean): void;
   /**
@@ -182,6 +219,11 @@ export interface Hud {
     entries: readonly AllTimeEntry[] | null,
     selfName: string | null,
   ): void;
+  /**
+   * First-run bottom strip (desktop). `text: null` hides it; may show
+   * key clusters matching the instruction panel. Dedupes identical views.
+   */
+  setFirstRunCoach(view: FirstRunCoachView): void;
 }
 
 export interface HudOptions {
@@ -218,6 +260,8 @@ export interface HudOptions {
 export function createHud(options: HudOptions = {}): Hud {
   const spillValue = document.querySelector<HTMLElement>('#spill-value')!;
   const balanceLabel = document.querySelector<HTMLElement>('#balance-label')!;
+  const balanceChrome = document.querySelector<HTMLElement>('.hud-balance-chrome')!;
+  const balanceBarTrack = document.querySelector<HTMLElement>('#balance-bar-track')!;
   const spillBar = document.querySelector<HTMLElement>('#spill-bar')!;
   const distanceValue = document.querySelector<HTMLElement>('#minimap-distance')!;
   const messageEl = document.querySelector<HTMLElement>('#message')!;
@@ -228,6 +272,17 @@ export function createHud(options: HudOptions = {}): Hud {
   const timerValue = document.querySelector<HTMLElement>('#timer-value')!;
   const roundLabel = document.querySelector<HTMLElement>('#hud-round')!;
   const toastEl = document.querySelector<HTMLElement>('#toast')!;
+  const proclamationEl =
+    document.querySelector<HTMLElement>('#hud-proclamation')!;
+  const proclamationCaption = proclamationEl.querySelector<HTMLElement>(
+    '.proclamation__caption',
+  )!;
+  const proclamationTitle = proclamationEl.querySelector<HTMLElement>(
+    '.proclamation__title',
+  )!;
+  const proclamationEmoji = proclamationEl.querySelector<HTMLElement>(
+    '.proclamation__emoji',
+  )!;
   const playtestHint = document.querySelector<HTMLElement>(
     '#debug-playtest-hint',
   );
@@ -245,6 +300,12 @@ export function createHud(options: HudOptions = {}): Hud {
     document.querySelector<HTMLElement>('#scoreboard-countdown')!;
   const leaderboardList =
     document.querySelector<HTMLOListElement>('#leaderboard-list')!;
+  const firstRunCoach = document.querySelector<HTMLElement>('#hud-coach')!;
+  const firstRunCoachKeys =
+    firstRunCoach.querySelector<HTMLElement>('.hud-coach__keys')!;
+  const firstRunCoachText = firstRunCoach.querySelector<HTMLElement>(
+    '.hud-coach__text',
+  )!;
   const instructionsPanel = document.querySelector<HTMLElement>(
     '#instructions-panel',
   )!;
@@ -295,6 +356,7 @@ export function createHud(options: HudOptions = {}): Hud {
   let lastRound = -1;
   let lastDreamLabel = '';
   let toastTimer: number | null = null;
+  let proclamationTimer: number | null = null;
   let lastNetStatus: NetStatus | null = null;
   let lastNetName: string | null = null;
   let lastNetHue: number | null = null;
@@ -392,8 +454,27 @@ export function createHud(options: HudOptions = {}): Hud {
   };
   // ----------------------------------------------------------------------
 
+  /** ~15%–100% maps to pulse speed; below ~14% the bar stays calm. */
+  const BALANCE_PULSE_T0 = 0.14;
+  const BALANCE_PULSE_DUR_LO = 0.88;
+  const BALANCE_PULSE_DUR_HI = 0.2;
+
   const setBalance: Hud['setBalance'] = (normalizedTilt) => {
-    const pct = Math.round(Math.max(0, Math.min(1, normalizedTilt)) * 100);
+    const t = Math.max(0, Math.min(1, normalizedTilt));
+    const stressed = t >= BALANCE_PULSE_T0;
+    /** Vars live on the chrome so both the card + track share timing / stress. */
+    balanceChrome.classList.toggle('is-balance-urgent', stressed);
+    if (stressed) {
+      const s = (t - BALANCE_PULSE_T0) / (1 - BALANCE_PULSE_T0);
+      const dur = BALANCE_PULSE_DUR_LO - s * (BALANCE_PULSE_DUR_LO - BALANCE_PULSE_DUR_HI);
+      balanceChrome.style.setProperty('--balance-pulse-sec', `${dur.toFixed(3)}s`);
+      balanceChrome.style.setProperty('--balance-stress', s.toFixed(4));
+    } else {
+      balanceChrome.style.removeProperty('--balance-pulse-sec');
+      balanceChrome.style.removeProperty('--balance-stress');
+    }
+
+    const pct = Math.round(t * 100);
     if (pct === lastBalancePct) return;
     lastBalancePct = pct;
     spillValue.textContent = `${pct}%`;
@@ -440,11 +521,15 @@ export function createHud(options: HudOptions = {}): Hud {
       // CSS (`body.is-touch .message-sub--kbd { display: none; }`): the
       // dedicated `game-over-cta` button handles restart there.
       messageEl.innerHTML =
+        `<div class="message-gameover message-gameover--spill">` +
+        `<span class="message-gameover__emoji" aria-hidden="true">🥛💦</span>` +
+        `<div class="message-gameover__body">` +
         `You spilled the milk!<br>` +
         `<span class="message-sub">` +
         `You were dreaming of <b>${dream}</b>. You had delivered ${litres} L.` +
         `</span><br>` +
-        `<span class="message-sub message-sub--kbd">R to dream again</span>`;
+        `<span class="message-sub message-sub--kbd">R to dream again</span>` +
+        `</div></div>`;
       showRestartCta();
       return;
     }
@@ -600,13 +685,73 @@ export function createHud(options: HudOptions = {}): Hud {
     roundLabel.textContent = `Round ${n}`;
   };
 
-  const showToast: Hud['showToast'] = (text, durationMs = 1800) => {
-    toastEl.textContent = text;
-    toastEl.classList.add('visible');
+  const showToast: Hud['showToast'] = (text, durationMs = 1800, options) => {
+    const tone = options?.tone ?? 'default';
+    toastEl.classList.remove('toast--celebrate', 'toast--warn');
+    if (tone === 'celebrate') toastEl.classList.add('toast--celebrate');
+    else if (tone === 'warn') toastEl.classList.add('toast--warn');
+
+    const emoji = options?.emoji?.trim();
+    const emojiHtml = emoji
+      ? `<span class="toast__emoji" aria-hidden="true">${emoji}</span>`
+      : '';
+    toastEl.innerHTML =
+      `<div class="toast__motion">` +
+      `<div class="toast__inner">${emojiHtml}<p class="toast__text"></p></div>` +
+      `</div>`;
+    const textEl = toastEl.querySelector('.toast__text');
+    if (textEl) textEl.textContent = text;
+
+    const motion = toastEl.querySelector<HTMLElement>('.toast__motion');
+    toastEl.classList.remove('visible');
+    motion?.classList.remove('toast--play');
+
+    const runIn = (): void => {
+      motion?.classList.add('toast--play');
+      toastEl.classList.add('visible');
+    };
+    requestAnimationFrame(() => {
+      requestAnimationFrame(runIn);
+    });
+
     if (toastTimer !== null) window.clearTimeout(toastTimer);
     toastTimer = window.setTimeout(() => {
       toastEl.classList.remove('visible');
+      motion?.classList.remove('toast--play');
       toastTimer = null;
+    }, durationMs);
+  };
+
+  const PROCLAMATION_KINDS: readonly ProclamationKind[] = ['dream', 'spill'];
+  const showProclamation: Hud['showProclamation'] = (view, durationMs = 2200) => {
+    // Reset kind classes so re-entrant calls don't leave both tones on.
+    for (const k of PROCLAMATION_KINDS) {
+      proclamationEl.classList.remove(`proclamation--${k}`);
+    }
+    proclamationEl.classList.add(`proclamation--${view.kind}`);
+
+    const caption = view.caption?.trim() ?? '';
+    proclamationCaption.textContent = caption;
+    proclamationCaption.hidden = caption.length === 0;
+
+    proclamationTitle.textContent = view.title;
+
+    const emoji = view.emoji?.trim() ?? '';
+    proclamationEmoji.textContent = emoji;
+    proclamationEmoji.hidden = emoji.length === 0;
+
+    // Force a reflow so re-triggering the same kind in quick succession
+    // still re-plays the pop-in animation (class remove → reflow → add).
+    proclamationEl.classList.remove('is-visible', 'is-playing');
+    void proclamationEl.offsetWidth;
+    proclamationEl.classList.add('is-visible', 'is-playing');
+    proclamationEl.setAttribute('aria-hidden', 'false');
+
+    if (proclamationTimer !== null) window.clearTimeout(proclamationTimer);
+    proclamationTimer = window.setTimeout(() => {
+      proclamationEl.classList.remove('is-visible', 'is-playing');
+      proclamationEl.setAttribute('aria-hidden', 'true');
+      proclamationTimer = null;
     }, durationMs);
   };
 
@@ -785,6 +930,62 @@ export function createHud(options: HudOptions = {}): Hud {
     renderScoreboardCountdown(secondsLeft);
   };
 
+  const COACH_KEYS_MOVE = `<div class="instructions-keys instructions-keys--cross" aria-hidden="true">
+  <kbd class="kbd kbd--top">W</kbd>
+  <kbd class="kbd kbd--left">A</kbd>
+  <kbd class="kbd kbd--mid">S</kbd>
+  <kbd class="kbd kbd--right">D</kbd>
+</div>`;
+  const COACH_KEYS_ARROWS = `<div class="instructions-keys instructions-keys--cross" aria-hidden="true">
+  <kbd class="kbd kbd--arrow kbd--top">↑</kbd>
+  <kbd class="kbd kbd--arrow kbd--left">←</kbd>
+  <kbd class="kbd kbd--arrow kbd--mid">↓</kbd>
+  <kbd class="kbd kbd--arrow kbd--right">→</kbd>
+</div>`;
+  /** Minimap cue only (matches the circular radar — no second “panel” icon). */
+  const COACH_RADAR_MINI = `<div class="hud-coach__hud-mini hud-coach__hud-mini--radar" aria-hidden="true">
+  <svg class="hud-coach__hud-mini-radar" viewBox="0 0 44 44" width="40" height="40" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="22" cy="22" r="20.5" fill="rgba(205, 190, 160, 0.08)" stroke="rgba(247, 244, 236, 0.35)" stroke-width="1" />
+    <circle cx="22" cy="22" r="13" fill="none" stroke="rgba(247, 244, 236, 0.18)" stroke-width="0.8" stroke-dasharray="2 2" />
+    <path d="M22 16 L26 27 L22 25 L18 27 Z" fill="#f7f4ec" stroke="rgba(10, 10, 18, 0.7)" stroke-width="0.6" />
+    <circle cx="33" cy="13" r="3" fill="none" stroke="rgba(255, 216, 107, 0.85)" stroke-width="1">
+      <animate attributeName="r" from="2.8" to="8" dur="1.4s" repeatCount="indefinite" />
+      <animate attributeName="stroke-opacity" from="0.85" to="0" dur="1.4s" repeatCount="indefinite" />
+    </circle>
+    <circle cx="33" cy="13" r="2.4" fill="#ffd86b" stroke="rgba(10, 10, 18, 0.85)" stroke-width="0.6" />
+  </svg>
+</div>`;
+
+  let lastFirstRunCoachKey = '';
+  const setFirstRunCoach: Hud['setFirstRunCoach'] = (view) => {
+    const key = view.text === null ? '' : `${view.text}|||${view.visual}`;
+    if (key === lastFirstRunCoachKey) {
+      return;
+    }
+    lastFirstRunCoachKey = key;
+    if (view.text === null) {
+      firstRunCoach.setAttribute('hidden', '');
+      firstRunCoach.setAttribute('aria-hidden', 'true');
+      firstRunCoachText.textContent = '';
+      firstRunCoachKeys.innerHTML = '';
+      return;
+    }
+    firstRunCoach.removeAttribute('hidden');
+    firstRunCoach.setAttribute('aria-hidden', 'false');
+    firstRunCoachText.textContent = view.text;
+    if (view.visual === 'move') {
+      firstRunCoachKeys.innerHTML = COACH_KEYS_MOVE;
+    } else if (view.visual === 'arrows') {
+      firstRunCoachKeys.innerHTML = COACH_KEYS_ARROWS;
+    } else if (view.visual === 'dreamhud') {
+      firstRunCoachKeys.innerHTML = COACH_RADAR_MINI;
+    } else if (view.visual === 'dreamonly') {
+      firstRunCoachKeys.innerHTML = '';
+    } else {
+      firstRunCoachKeys.innerHTML = '';
+    }
+  };
+
   const setAllTimeLeaderboard: Hud['setAllTimeLeaderboard'] = (
     entries,
     selfName,
@@ -865,6 +1066,7 @@ export function createHud(options: HudOptions = {}): Hud {
     setTime,
     setRound,
     showToast,
+    showProclamation,
     setDebugInvincible,
     setNetStatus,
     showScoreboard,
@@ -873,5 +1075,6 @@ export function createHud(options: HudOptions = {}): Hud {
     isScoreboardVisible,
     setScoreboardCountdown,
     setAllTimeLeaderboard,
+    setFirstRunCoach,
   };
 }

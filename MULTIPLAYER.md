@@ -206,6 +206,55 @@ Phase 2 ships in two passes so we can validate the network plumbing before the v
 
 **Done when**: production joins show a resolved country in logs and Supabase; the all-time list shows flags for rows with a country. ✅
 
+### Phase 8 — Durable round counter + dev write gate (DONE)
+- [x] **Durable round total.** `MilkDreamsRoom.roundNumber` used to reset to 1 on every server restart. New Supabase table `milk_dreams.round_counter(id smallint PK default 1, total_rounds bigint not null default 0, updated_at timestamptz default now())` — single-row singleton enforced by `check (id = 1)` — stores the cumulative rounds-ever count. Two SECURITY DEFINER functions gate access: `get_round_counter() → bigint` (read the counter at boot) and `increment_round_counter() → void` (atomic bump via `update ... set total_rounds = total_rounds + 1`). Both are `grant execute ... to anon` with `set search_path = ''`; the table itself stays unreachable to the anon role, same defense-in-depth as the rankings.
+- [x] **Server wiring.** `onCreate` is now `async` and seeds `state.roundNumber` from `getRoundCounter()` BEFORE the first `startRound()` (so a client racing us to connect already sees the correct label in its initial state hydration). `startRound()` bumps local `roundNumber` and fire-and-forgets `incrementRoundCounter()` — same fire-and-forget pattern as the per-round contributions, so a slow/wedged Supabase never stalls the round lifecycle. Worst case: one failed RPC drops a single round from the persistent total.
+- [x] **Dev write gate.** Writes now require `NODE_ENV === 'production'` on top of `SUPABASE_URL` / `SUPABASE_ANON_KEY`. Pointing `pnpm dev:server` at the production Supabase project no longer pollutes the real leaderboard or advances the global round counter — `recordRoundContributions` and `incrementRoundCounter` both short-circuit to no-ops when the env gate fails. **Reads are NOT gated**: `topRankings` and `getRoundCounter` still go through, so a dev server sees the same leaderboard and round label as production (useful for QAing the UI with real data). The smoke-leaderboard test forces `NODE_ENV=production` on its persistence-ON path so CI still exercises the write path.
+- [x] **Canonical DDL** (apply via the Supabase SQL editor; runnable standalone, idempotent):
+
+  ```sql
+  create table if not exists milk_dreams.round_counter (
+    id smallint primary key default 1,
+    total_rounds bigint not null default 0,
+    updated_at timestamptz not null default now(),
+    constraint round_counter_singleton check (id = 1)
+  );
+
+  insert into milk_dreams.round_counter (id, total_rounds)
+  values (1, 0)
+  on conflict (id) do nothing;
+
+  create or replace function milk_dreams.increment_round_counter()
+  returns void
+  language plpgsql
+  security definer
+  set search_path = ''
+  as $$
+  begin
+    update milk_dreams.round_counter
+       set total_rounds = total_rounds + 1,
+           updated_at = now()
+     where id = 1;
+  end;
+  $$;
+
+  create or replace function milk_dreams.get_round_counter()
+  returns bigint
+  language sql
+  security definer
+  set search_path = ''
+  as $$
+    select total_rounds from milk_dreams.round_counter where id = 1;
+  $$;
+
+  revoke all on function milk_dreams.increment_round_counter() from public;
+  revoke all on function milk_dreams.get_round_counter() from public;
+  grant execute on function milk_dreams.increment_round_counter() to anon;
+  grant execute on function milk_dreams.get_round_counter() to anon;
+  ```
+
+**Done when**: restarting the production server preserves the round label (`Round N+1` picks up where `Round N` left off); running `pnpm dev:server` with SUPABASE_* set does NOT bump the production counter. ✅
+
 ## Things explicitly OUT of scope
 
 To keep momentum and avoid creep:
@@ -276,12 +325,12 @@ lechera/
   server/                     ← workspace package "milk-dreams-server"; depends on `@milk-dreams/shared: workspace:*`
     package.json
     tsconfig.json
-    .env.example              ← documents SUPABASE_URL + SUPABASE_ANON_KEY for Phase 5 (copy to .env to enable persistence)
+    .env.example              ← documents SUPABASE_URL + SUPABASE_ANON_KEY for Phase 5 + the NODE_ENV=production write gate added in Phase 8
     src/
       index.ts                ← dotenv preload + Colyseus + WS transport + health + GET /leaderboard
       persistence/
-        supabase.ts           ← lazy singleton store backed by Supabase RPCs (`record_contribution` with `p_country`, `top_rankings`); no-op fallback when env vars are missing. Re-aliases `LeaderboardEntry` from shared as `RankingEntry` for in-house clarity
-      rooms/MilkDreamsRoom.ts ← Player schema (name, x, z, yaw, colorHue, dreamIndex, litres, litresDelivered, country) + room state (phase, phaseEndsAt, roundNumber), `onAuth` geoip + pose + claim_delivery + report_spill handlers, hue palette, round-lifecycle timer (endRound flips phase immediately, then persists in background with bounded RPC timeouts). Phase 6: re-runs shared `sanitiseName` on `JoinOptions.name` and **throws (rejects the join) on invalid**, picks a ring spawn, restores `litresDelivered` from a module-scope `recentlyLeftByName` cache when a player rejoins under the same name within 30 s
+        supabase.ts           ← lazy singleton store backed by Supabase RPCs (`record_contribution` with `p_country`, `top_rankings`, `get_round_counter`, `increment_round_counter`); no-op fallback when env vars are missing. Phase 8: when Supabase IS configured but `NODE_ENV !== 'production'`, reads still hit Supabase (dev sees same data as prod) while writes (`recordRoundContributions`, `incrementRoundCounter`) short-circuit to no-ops. Re-aliases `LeaderboardEntry` from shared as `RankingEntry` for in-house clarity
+      rooms/MilkDreamsRoom.ts ← Player schema (name, x, z, yaw, colorHue, dreamIndex, litres, litresDelivered, country) + room state (phase, phaseEndsAt, roundNumber), `onAuth` geoip + pose + claim_delivery + report_spill handlers, hue palette, round-lifecycle timer (endRound flips phase immediately, then persists in background with bounded RPC timeouts). Phase 6: re-runs shared `sanitiseName` on `JoinOptions.name` and **throws (rejects the join) on invalid**, picks a ring spawn, restores `litresDelivered` from a module-scope `recentlyLeftByName` cache when a player rejoins under the same name within 30 s. Phase 8: `onCreate` is async and seeds `state.roundNumber` from the durable `milk_dreams.round_counter` before the first `startRound`; every subsequent `startRound` fire-and-forgets an `increment_round_counter` RPC
     scripts/
       smoke-client.mjs        ← one-shot connect/leave smoke test
       smoke-multi.mjs         ← spawns two clients, asserts mutual visibility (Phase 2)

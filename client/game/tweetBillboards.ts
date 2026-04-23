@@ -1,4 +1,9 @@
 import * as THREE from 'three';
+import {
+  getDefaultColliderPresets,
+  stampBillboardObstacle,
+  type ColliderPresets,
+} from './colliderPresets';
 import type { Obstacle } from './level';
 import type { BillboardModel, BillboardScreenPose } from './billboardModel';
 import { renderTweetToCanvas, type Tweet } from './tweetCanvas';
@@ -81,6 +86,7 @@ export interface TweetBillboardsManager {
 export function buildBillboardCollisionObstacles(
   model: BillboardModel,
   placements: readonly TweetBillboardPlacement[],
+  colliderPresets: ColliderPresets = getDefaultColliderPresets(),
 ): Obstacle[] {
   const out: Obstacle[] = [];
   for (const placement of placements) {
@@ -93,7 +99,7 @@ export function buildBillboardCollisionObstacles(
     const visual = new THREE.Group();
     visual.name = `billboard-collider-${placement.tweet.id}`;
 
-    out.push({
+    const ob: Obstacle = {
       center: new THREE.Vector3(
         placement.position.x,
         model.halfY,
@@ -103,7 +109,9 @@ export function buildBillboardCollisionObstacles(
       halfZ: halfZw,
       halfY: model.halfY,
       visual,
-    });
+    };
+    stampBillboardObstacle(ob, model, halfXw, halfZw, model.halfY, colliderPresets);
+    out.push(ob);
   }
   return out;
 }

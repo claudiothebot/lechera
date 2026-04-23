@@ -66,6 +66,23 @@ export interface LeaderboardStore {
    * empty array on any error — same contract as `recordRoundContributions`.
    */
   topRankings(limit: number): Promise<readonly RankingEntry[]>;
+  /**
+   * Read the durable "rounds ever played across all server lifetimes"
+   * counter. Returns `0` when persistence is disabled or the read
+   * fails — same swallow-errors contract as the other methods. The
+   * room uses the returned value to seed `state.roundNumber` at boot
+   * so a server restart doesn't reset the round label to 1.
+   */
+  getRoundCounter(): Promise<number>;
+  /**
+   * Atomically bump the durable round counter by one. Fire-and-forget
+   * from the room's perspective — we never await this on the hot path
+   * because the round lifecycle must not stall behind Supabase. Errors
+   * are logged and swallowed; at worst we drop a single round from
+   * the persistent total (local `state.roundNumber` stays correct for
+   * the current process).
+   */
+  incrementRoundCounter(): Promise<void>;
 }
 
 const NOOP_STORE: LeaderboardStore = {
@@ -74,6 +91,10 @@ const NOOP_STORE: LeaderboardStore = {
   async topRankings() {
     return [];
   },
+  async getRoundCounter() {
+    return 0;
+  },
+  async incrementRoundCounter() {},
 };
 
 /**
@@ -119,6 +140,25 @@ export function createLeaderboardStore(): LeaderboardStore {
     return NOOP_STORE;
   }
 
+  // Dev gate: when Supabase vars are set but we're not running as
+  // production, reads STILL go through (dev sees the same leaderboard
+  // and durable round counter as prod — useful to QA the UI with real
+  // data) but writes are no-ops. Otherwise every `pnpm dev:server` run
+  // would pollute the prod `rankings` table and bump the global round
+  // counter — which is exactly the surprise the durable counter is
+  // meant to avoid.
+  //
+  // Same guard the `/dev/level` editor save uses (`NODE_ENV !==
+  // 'production'` → disabled). To exercise the write path from a
+  // local shell for one-off testing, run the server with
+  // `NODE_ENV=production pnpm --filter milk-dreams-server start`.
+  const writesEnabled = process.env.NODE_ENV === 'production';
+  if (!writesEnabled) {
+    console.log(
+      '[persistence] SUPABASE_* set, NODE_ENV !== production — reads enabled, writes disabled (dev mode).',
+    );
+  }
+
   // The anon key has restricted privileges — only the two RPCs are
   // grant-execute for `anon`. We never SELECT or UPSERT directly here,
   // which means a leaked anon key cannot dump or rewrite the rankings
@@ -156,6 +196,7 @@ export function createLeaderboardStore(): LeaderboardStore {
   return {
     enabled: true,
     async recordRoundContributions(entries) {
+      if (!writesEnabled) return;
       if (entries.length === 0) return;
       // Sequential calls instead of Promise.all: keeps the per-row
       // error visible in logs and avoids hammering the DB with N
@@ -210,6 +251,48 @@ export function createLeaderboardStore(): LeaderboardStore {
           `[persistence] top_rankings threw: ${(err as Error).message}`,
         );
         return [];
+      }
+    },
+    async getRoundCounter() {
+      try {
+        const { data, error } = await withTimeout(
+          'get_round_counter',
+          client.rpc('get_round_counter'),
+        );
+        if (error) {
+          console.warn(
+            `[persistence] get_round_counter failed: ${error.message}`,
+          );
+          return 0;
+        }
+        // The RPC returns `bigint`; the JS client passes bigints back as
+        // `number` when they fit and `string` otherwise. Coerce defensively
+        // so a future 2^53-rounds-played server doesn't silently NaN.
+        const n = typeof data === 'string' ? Number(data) : (data as number);
+        return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+      } catch (err) {
+        console.warn(
+          `[persistence] get_round_counter threw: ${(err as Error).message}`,
+        );
+        return 0;
+      }
+    },
+    async incrementRoundCounter() {
+      if (!writesEnabled) return;
+      try {
+        const { error } = await withTimeout(
+          'increment_round_counter',
+          client.rpc('increment_round_counter', {}, { get: false }),
+        );
+        if (error) {
+          console.warn(
+            `[persistence] increment_round_counter failed: ${error.message}`,
+          );
+        }
+      } catch (err) {
+        console.warn(
+          `[persistence] increment_round_counter threw: ${(err as Error).message}`,
+        );
       }
     },
   };

@@ -33,6 +33,7 @@ import {
   createJugInstance,
   type JugSource,
 } from '../game/jugModel';
+import { countryCodeToFlagEmoji } from '@milk-dreams/shared';
 import type {
   MultiplayerHandle,
   RemotePlayerView,
@@ -63,7 +64,7 @@ const NAME_TAG_LIFT = 0.42;
  */
 const BODY_GROUP_YAW_OFFSET = Math.PI;
 /** Sprite world height of the name tag. Width derives from canvas aspect. */
-const NAME_TAG_WORLD_HEIGHT = 0.28;
+const NAME_TAG_WORLD_HEIGHT = 0.195;
 /**
  * Lowpass coefficient for animation speed. Higher = snappier, lower =
  * smoother. With 20 Hz patches and 60 Hz render, 0.25 keeps the walk
@@ -92,8 +93,8 @@ interface RemoteAvatar {
   lastX: number;
   lastZ: number;
   smoothedSpeed: number;
-  /** Name currently shown on the floating label, for redraw debounce. */
-  shownName: string;
+  /** Fingerprint of name + country for redraw debounce (schema mutates in place). */
+  shownTagKey: string;
   nameSprite: THREE.Sprite;
   nameTexture: THREE.CanvasTexture;
 }
@@ -216,7 +217,7 @@ export function createRemotePlayers(
 
       applyRemoteJugProgression(avatar);
 
-      if (avatar.view.name && avatar.view.name !== avatar.shownName) {
+      if (avatar.view.name && remoteTagKey(avatar.view) !== avatar.shownTagKey) {
         redrawNameTag(avatar);
       }
     }
@@ -290,7 +291,11 @@ function createAvatar(
 
   // Name tag: sprite anchored above the jug area in local space. Y is
   // refreshed in `applyRemoteJugProgression` as `dreamIndex` scales the jug.
-  const { sprite, texture } = createNameTag(view.name || '...', view.colorHue);
+  const { sprite, texture } = createNameTag(
+    view.name || '...',
+    view.colorHue,
+    view.country,
+  );
   group.add(sprite);
 
   const avatar: RemoteAvatar = {
@@ -303,7 +308,7 @@ function createAvatar(
     lastX: view.x,
     lastZ: view.z,
     smoothedSpeed: 0,
-    shownName: view.name,
+    shownTagKey: remoteTagKey(view),
     nameSprite: sprite,
     nameTexture: texture,
   };
@@ -338,31 +343,41 @@ function disposeAvatar(avatar: RemoteAvatar): void {
 // -----------------------------------------------------------------------------
 
 /**
- * Canvas resolution for the floating name tag. 320 × 64 comfortably
- * holds the longest allowed name (18 chars from
- * `MAX_NAME_LENGTH` × ~14 px per glyph at the base 28 px font ≈
- * 250 px) with breathing room for accents / wider glyphs. We still
- * auto-shrink the font in `drawNameToCanvas` for pathological cases
- * (e.g. all wide characters), but the wider canvas means the
- * shrink rarely kicks in in practice.
+ * Name tag canvas height (px). Width is **content-driven** (clamped) so
+ * short names don’t sit in a huge empty pill; max still fits long names.
  */
-const NAME_TAG_PX_WIDTH = 320;
 const NAME_TAG_PX_HEIGHT = 64;
+const NAME_TAG_PX_MIN_WIDTH = 96;
+const NAME_TAG_PX_MAX_WIDTH = 300;
 /** Inner horizontal padding the text must NEVER cross (matches the pill stroke). */
-const NAME_TAG_PADDING_PX = 18;
+const NAME_TAG_PADDING_PX = 14;
+/** Space between flag emoji and player name. */
+const NAME_TAG_FLAG_GAP_PX = 6;
 /** Base / max font size. We shrink from here until the text fits. */
-const NAME_TAG_BASE_FONT_PX = 28;
+const NAME_TAG_BASE_FONT_PX = 26;
 /** Lower bound — below this the text is unreadable, just clip. */
-const NAME_TAG_MIN_FONT_PX = 16;
+const NAME_TAG_MIN_FONT_PX = 15;
+
+const NAME_FONT_STACK =
+  '600 %dpx -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple Color Emoji", "Segoe UI Emoji", sans-serif';
+
+function remoteTagKey(view: RemotePlayerView): string {
+  return `${view.name}\u0001${view.country ?? ''}`;
+}
+
+function syncNameTagSpriteScale(sprite: THREE.Sprite, canvas: HTMLCanvasElement): void {
+  const aspect = canvas.width / Math.max(1, canvas.height);
+  sprite.scale.set(NAME_TAG_WORLD_HEIGHT * aspect, NAME_TAG_WORLD_HEIGHT, 1);
+}
 
 function createNameTag(
   name: string,
   hue: number,
+  country: string,
 ): { sprite: THREE.Sprite; texture: THREE.CanvasTexture } {
   const canvas = document.createElement('canvas');
-  canvas.width = NAME_TAG_PX_WIDTH;
   canvas.height = NAME_TAG_PX_HEIGHT;
-  drawNameToCanvas(canvas, name, hue);
+  drawNameToCanvas(canvas, name, hue, country);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -377,8 +392,7 @@ function createNameTag(
     depthWrite: false,
   });
   const sprite = new THREE.Sprite(material);
-  const aspect = NAME_TAG_PX_WIDTH / NAME_TAG_PX_HEIGHT;
-  sprite.scale.set(NAME_TAG_WORLD_HEIGHT * aspect, NAME_TAG_WORLD_HEIGHT, 1);
+  syncNameTagSpriteScale(sprite, canvas);
   return { sprite, texture };
 }
 
@@ -387,52 +401,91 @@ function redrawNameTag(avatar: RemoteAvatar): void {
   if (!map) return;
   const canvas = map.image as HTMLCanvasElement | undefined;
   if (!canvas) return;
-  drawNameToCanvas(canvas, avatar.view.name, avatar.view.colorHue);
+  drawNameToCanvas(
+    canvas,
+    avatar.view.name,
+    avatar.view.colorHue,
+    avatar.view.country,
+  );
   avatar.nameTexture.needsUpdate = true;
-  avatar.shownName = avatar.view.name;
+  syncNameTagSpriteScale(avatar.nameSprite, canvas);
+  avatar.shownTagKey = remoteTagKey(avatar.view);
 }
 
 function drawNameToCanvas(
   canvas: HTMLCanvasElement,
   name: string,
   hue: number,
+  country: string,
 ): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
-  const w = canvas.width;
-  const h = canvas.height;
-  ctx.clearRect(0, 0, w, h);
+  const h = NAME_TAG_PX_HEIGHT;
 
+  /** No UN placeholder on world tags — only real geoip flags (HUD still uses 🇺🇳). */
+  const flagStr = countryCodeToFlagEmoji(country);
+  const hasFlag = flagStr.length > 0;
+  const flagPx = hasFlag ? Math.min(30, Math.round(h * 0.4)) : 0;
+
+  let flagW = 0;
+  if (hasFlag) {
+    ctx.font = NAME_FONT_STACK.replace('%d', String(flagPx));
+    flagW = ctx.measureText(flagStr).width;
+  }
+
+  const innerMax = NAME_TAG_PX_MAX_WIDTH - NAME_TAG_PADDING_PX * 2;
+  const nameBudget = Math.max(
+    48,
+    innerMax - (hasFlag ? flagW + NAME_TAG_FLAG_GAP_PX : 0),
+  );
+
+  let fontPx = NAME_TAG_BASE_FONT_PX;
+  while (fontPx > NAME_TAG_MIN_FONT_PX) {
+    ctx.font = NAME_FONT_STACK.replace('%d', String(fontPx));
+    if (ctx.measureText(name).width <= nameBudget) break;
+    fontPx -= 2;
+  }
+  ctx.font = NAME_FONT_STACK.replace('%d', String(fontPx));
+  const nameW = ctx.measureText(name).width;
+
+  const contentInner =
+    (hasFlag ? flagW + NAME_TAG_FLAG_GAP_PX : 0) + nameW;
+  const targetW = Math.ceil(
+    Math.max(
+      NAME_TAG_PX_MIN_WIDTH,
+      Math.min(
+        NAME_TAG_PX_MAX_WIDTH,
+        contentInner + NAME_TAG_PADDING_PX * 2,
+      ),
+    ),
+  );
+
+  canvas.width = targetW;
+  canvas.height = h;
+
+  ctx.clearRect(0, 0, targetW, h);
   const radius = h / 2;
   const fill = hslToCss(hue, 0.55, 0.32, 0.85);
   const border = hslToCss(hue, 0.6, 0.7, 0.95);
-  roundedRect(ctx, 4, 4, w - 8, h - 8, radius - 4);
+  roundedRect(ctx, 4, 4, targetW - 8, h - 8, radius - 4);
   ctx.fillStyle = fill;
   ctx.fill();
   ctx.lineWidth = 2;
   ctx.strokeStyle = border;
   ctx.stroke();
 
-  ctx.fillStyle = '#fdfaf2';
-  // Auto-shrink the font so long names (up to MAX_NAME_LENGTH from
-  // the shared name module) never overflow the pill. We start at the
-  // base size and step down 2 px at a time until the rendered text
-  // fits within the safe inner width, bounded below so unreadable
-  // tags still render at the minimum size (and clip).
-  const safeWidth = w - NAME_TAG_PADDING_PX * 2;
-  let fontPx = NAME_TAG_BASE_FONT_PX;
-  while (fontPx > NAME_TAG_MIN_FONT_PX) {
-    ctx.font = `600 ${fontPx}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-    if (ctx.measureText(name).width <= safeWidth) break;
-    fontPx -= 2;
-  }
-  // Final assignment guards the case where we exited the loop at
-  // exactly NAME_TAG_MIN_FONT_PX (the loop body sets `font` before
-  // the check, but only when the previous size didn't fit).
-  ctx.font = `600 ${fontPx}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-  ctx.textAlign = 'center';
+  ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillText(name, w / 2, h / 2);
+  ctx.fillStyle = '#fdfaf2';
+
+  let x = (targetW - contentInner) / 2;
+  if (hasFlag) {
+    ctx.font = NAME_FONT_STACK.replace('%d', String(flagPx));
+    ctx.fillText(flagStr, x, h / 2);
+    x += flagW + NAME_TAG_FLAG_GAP_PX;
+  }
+  ctx.font = NAME_FONT_STACK.replace('%d', String(fontPx));
+  ctx.fillText(name, x, h / 2);
 }
 
 function roundedRect(

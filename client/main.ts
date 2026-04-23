@@ -37,7 +37,7 @@ import {
 } from './game/tweetBillboards';
 import { EXAMPLE_TWEETS } from './game/exampleTweets';
 import { DREAM_GOALS } from '@milk-dreams/shared';
-import { createProgression } from './game/progression';
+import { createProgression, rewardEmojiForDreamIndex } from './game/progression';
 import { createCameraRig } from './render/cameraRig';
 import { installHdriSky } from './render/sky';
 import { createHud, type GameStatus } from './ui/hud';
@@ -57,10 +57,16 @@ import {
   httpEndpointFromWs,
   type LeaderboardEntry,
 } from './net/leaderboard';
-import type { AllTimeEntry, ScoreboardEntry } from './ui/hud';
+import type { AllTimeEntry, ProclamationView, ScoreboardEntry } from './ui/hud';
 import { getOrAskPlayerName } from './ui/nameModal';
+import {
+  initFirstRunCoach,
+  updateFirstRunCoach,
+  type FirstRunCoachView,
+} from './ui/firstRunCoach';
 import type { Obstacle } from './game/level';
 import { buildBillboardPlacements } from './game/billboardLayout';
+import { fetchColliderPresets } from './game/colliderPresets';
 
 /** ISO alpha-2 for HUD net badge flag; empty / missing → no flag. */
 function countryForNetBadge(self: RemotePlayerView | null): string | null {
@@ -86,17 +92,36 @@ const TOTAL_TIME_SECONDS = 180;
  */
 const DEBUG_INVINCIBLE = false;
 
-function dreamAdvanceToast(obtained: string, nextName: string): string {
-  return `You got ${obtained.toLowerCase()}! Now you dream of ${nextName.toLowerCase()}.`;
+/**
+ * Cinematic proclamation shown when the player completes a delivery and
+ * the next dream in the chain kicks in. `obtained` is the dream we just
+ * cashed in (for the "Got X" caption); `nextName` is what she's now
+ * chasing — the main headline. Both are display-cased by CSS.
+ */
+function dreamProclamation(
+  obtained: string,
+  nextName: string,
+  emoji: string | undefined,
+): ProclamationView {
+  return {
+    kind: 'dream',
+    caption: `Got ${obtained}  ·  Now chasing`,
+    title: nextName,
+    emoji,
+  };
 }
 
 /**
- * Phase 4.5 — toast shown when a soft-spill resets the dream chain
- * mid-round (online only). Mirrors the SP "you spilled the milk" text
- * but framed as a continuation, not a game over.
+ * Phase 4.5 — proclamation shown when a soft-spill resets the dream
+ * chain mid-round (online only). Kept intentionally short; the tone
+ * does the work (shake + warm red).
  */
-const SPILL_TOAST_TEXT =
-  'You spilled the milk! Starting over with the small jar.';
+const SPILL_PROCLAMATION: ProclamationView = {
+  kind: 'spill',
+  caption: 'Back to the small jar',
+  title: 'Spilled!',
+  emoji: '🥛',
+};
 
 /**
  * Cumulative litres delivered for a 0-based dream index reached by
@@ -171,6 +196,9 @@ async function boot() {
   applyDeviceClass();
 
   const params = new URLSearchParams(window.location.search);
+  const firstRunCoachDisabled = params.get('coach') === '0';
+  initFirstRunCoach({ disabled: firstRunCoachDisabled });
+  const nameModalForCoach = document.getElementById('name-modal');
   const perfMode = params.get('perf') === '1';
   if (params.get('editor') === '1') {
     const { bootLevelEditor } = await import('./editor/levelEditor');
@@ -243,11 +271,13 @@ async function boot() {
   const level = createLevel(levelDefinition);
   scene.add(level.group);
 
+  const colliderPresets = await fetchColliderPresets();
+
   loadLevelTextures(level, renderer).catch((err) => {
     console.error('[level] failed to load ground textures', err);
   });
 
-  loadLevelHouses(level).catch((err) => {
+  loadLevelHouses(level, colliderPresets).catch((err) => {
     console.error('[level] failed to load house obstacles', err);
   });
 
@@ -471,13 +501,13 @@ async function boot() {
   if (decorEnabled) {
     (async () => {
       try {
-        await loadLevelTrees(level, DREAM_GOALS);
+        await loadLevelTrees(level, DREAM_GOALS, colliderPresets);
       } catch (err) {
         console.error('[trees] failed to scatter trees', err);
       }
 
       try {
-        await loadLevelSceneryProps(level);
+        await loadLevelSceneryProps(level, colliderPresets);
       } catch (err) {
         console.error('[scenery] failed to load props', err);
       }
@@ -491,7 +521,9 @@ async function boot() {
           EXAMPLE_TWEETS,
           { x: level.spawn.x, z: level.spawn.z },
         );
-        level.addObstacles(buildBillboardCollisionObstacles(billboardModel, placements));
+        level.addObstacles(
+          buildBillboardCollisionObstacles(billboardModel, placements, colliderPresets),
+        );
         createTweetBillboards({
           scene,
           camera,
@@ -637,6 +669,9 @@ async function boot() {
   }
 
   function restart() {
+    if (!firstRunCoachDisabled) {
+      initFirstRunCoach({ disabled: false });
+    }
     // Position + balance are client-authoritative, always safe to reset.
     player.reset(level.spawn);
     balance.reset();
@@ -855,7 +890,7 @@ async function boot() {
         //   1) Round transition `scoreboard → playing` (Phase 4) —
         //      the round-overlay branch already handled the UX.
         //   2) Soft-spill ack (Phase 4.5) — the spill branch in the
-        //      main loop already showed `SPILL_TOAST_TEXT` locally.
+        //      main loop already showed `SPILL_PROCLAMATION` locally.
         // Either way we just rebuild visuals silently here. The
         // schema's `litresDelivered` is the authoritative running
         // total, so `applyCurrentDream` picking it up via
@@ -865,11 +900,19 @@ async function boot() {
           applyCurrentDream(false);
           return;
         }
+        const prevIndex = progression.current.index;
         const obtained = progression.current.dreamName;
         progression.setIndex(snapshot.dreamIndex);
         applyCurrentDream(true);
         const nextName = progression.current.dreamName;
-        hud.showToast(dreamAdvanceToast(obtained, nextName), 2200);
+        hud.showProclamation(
+          dreamProclamation(
+            obtained,
+            nextName,
+            rewardEmojiForDreamIndex(prevIndex),
+          ),
+          2400,
+        );
       },
     });
 
@@ -1234,7 +1277,7 @@ async function boot() {
         if (serverProgressionLive) {
           balance.reset();
           multi.sendSpillReport();
-          hud.showToast(SPILL_TOAST_TEXT, 2200);
+          hud.showProclamation(SPILL_PROCLAMATION, 2600);
         } else {
           status = 'spilled';
           hud.setStatus(status, {
@@ -1269,11 +1312,19 @@ async function boot() {
           // Fable logic: she arrives with milk, imagines trading it for
           // the reward of the current dream, then starts dreaming of
           // the next.
+          const prevIndex = progression.current.index;
           const obtained = progression.current.dreamName;
           progression.advance();
           applyCurrentDream(true);
           const nextName = progression.current.dreamName;
-          hud.showToast(dreamAdvanceToast(obtained, nextName), 2200);
+          hud.showProclamation(
+            dreamProclamation(
+              obtained,
+              nextName,
+              rewardEmojiForDreamIndex(prevIndex),
+            ),
+            2400,
+          );
         }
       }
     } else {
@@ -1327,6 +1378,37 @@ async function boot() {
       obstacles: level.obstacles,
       remotes: remotePlayers?.positions(),
     });
+
+    let firstRunCoachView: FirstRunCoachView = {
+      text: null,
+      visual: 'none',
+    };
+    if (!firstRunCoachDisabled && status === 'playing') {
+      const roundPhase = serverRoundLive ? multi.round()?.phase : undefined;
+      const nameModalOpen =
+        nameModalForCoach !== null &&
+        !nameModalForCoach.classList.contains('hidden');
+      const coachBlocked =
+        hud.getInstructionsVisible() ||
+        hud.getStoryVisible() ||
+        hud.isScoreboardVisible() ||
+        nameModalOpen ||
+        roundPhase === 'scoreboard';
+      const distCoach = player.group.position.distanceTo(level.goal);
+      firstRunCoachView = updateFirstRunCoach({
+        dt,
+        isDesktop: !document.body.classList.contains('is-touch'),
+        blocked: coachBlocked,
+        hasMinimap: minimapEnabled,
+        active: true,
+        playerSpeed: player.result.speed,
+        balanceInput:
+          Math.abs(input.axes.tiltForward) + Math.abs(input.axes.tiltRight),
+        distanceToGoal: distCoach,
+        litresDelivered: currentLitresDelivered(),
+      });
+    }
+    hud.setFirstRunCoach(firstRunCoachView);
 
     renderer.render(scene, camera);
     dreamPreview?.render(dt);

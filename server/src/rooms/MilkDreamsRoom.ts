@@ -100,6 +100,10 @@ export class MilkDreamsState extends Schema {
    * "we just started a new round" even if `phase` happens to bounce
    * through the same value (e.g. on hot-reload during dev). Starts at 0
    * so the first call to `startRound()` (in `onCreate`) lands on 1.
+   *
+   * In production the server seeds this field from the durable
+   * `milk_dreams.round_counter` at boot, so a restart doesn't reset the
+   * HUD label back to "Round 1". See `MilkDreamsRoom.onCreate`.
    */
   roundNumber = 0;
 }
@@ -268,10 +272,32 @@ export class MilkDreamsRoom extends Room<{ state: MilkDreamsState }> {
 
   private phaseTimer: NodeJS.Timeout | null = null;
 
-  override onCreate(): void {
+  override async onCreate(): Promise<void> {
     // Broadcast accumulated patches at 20 Hz. Player input arrives at the
     // same rate from the client, so this matches naturally.
     this.setPatchRate(1000 / 20);
+
+    // Seed the durable round counter BEFORE any message handlers or
+    // the first `startRound()` call so the initial state hydrated to a
+    // client racing us to connect already carries the right label.
+    //
+    // Reads are NOT gated on NODE_ENV: a dev server with SUPABASE_*
+    // set sees the same counter value as production (so the HUD
+    // reflects reality when QAing locally). Only writes are gated —
+    // a dev round bumps the in-memory counter but not the durable row.
+    // When persistence is fully disabled (no Supabase vars) the store
+    // returns 0 and the first round lands on 1 as before. Failures
+    // are swallowed inside the store and surface as 0, so a flaky
+    // boot can't block the room.
+    const store = getLeaderboardStore();
+    const seed = await store.getRoundCounter();
+    // `startRound` will `+= 1` immediately, so store the PRE-increment
+    // value here. If the seed is 0 (disabled / failure) the first round
+    // lands on 1 as it always has.
+    this.state.roundNumber = seed;
+    if (seed > 0) {
+      console.log(`[room] seeded roundNumber from durable counter: ${seed}`);
+    }
 
     this.onMessage('pose', (client, raw) => {
       const msg = raw as Partial<PoseMessage>;
@@ -513,6 +539,18 @@ export class MilkDreamsRoom extends Room<{ state: MilkDreamsState }> {
     console.log(
       `[room] round ${this.state.roundNumber} started (ends in ${Math.round(ROUND_DURATION_MS / 1000)}s)`,
     );
+    // Persist the bump durably. Fire-and-forget for the same reason
+    // `recordRoundContributions` is fire-and-forget in `endRound()`:
+    // the round lifecycle must never stall behind Supabase. A failed
+    // RPC drops a single round from the persistent total; the local
+    // `state.roundNumber` remains correct for the current process.
+    void getLeaderboardStore()
+      .incrementRoundCounter()
+      .catch((err) => {
+        console.warn(
+          `[room] background round-counter persist threw: ${(err as Error).message}`,
+        );
+      });
     this.phaseTimer = setTimeout(
       () => {
         void this.endRound();

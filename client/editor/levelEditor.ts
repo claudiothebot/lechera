@@ -42,10 +42,20 @@ import {
 } from './assetCatalog';
 import { loadBillboardModel } from '../game/billboardModel';
 import {
+  buildBillboardCollisionObstacles,
   createTweetBillboards,
   type TweetBillboardsManager,
 } from '../game/tweetBillboards';
+import {
+  clearColliderPresetsCache,
+  cloneColliderPresets,
+  fetchColliderPresets,
+  reapplyAllColliderPresets,
+  serializeColliderPresets,
+} from '../game/colliderPresets';
 import { installHdriSky } from '../render/sky';
+import { houseFootprintWorldCornersXz } from '../game/obb2dPlayerCollision';
+import { mountColliderPresetForm } from './colliderPresetForm';
 import { DREAM_GOALS, GOAL_RADIUS } from '@milk-dreams/shared';
 
 type EditorMode = 'houses' | 'trees' | 'props' | 'billboards' | 'paving' | 'boundary';
@@ -62,6 +72,7 @@ type Selection =
 interface PreviewState {
   level: Level;
   billboardManager: TweetBillboardsManager | null;
+  colliderWireGroup: THREE.Group;
 }
 
 interface EditorUi {
@@ -83,6 +94,10 @@ interface EditorUi {
   advancedImport: HTMLButtonElement;
   advancedJson: HTMLTextAreaElement;
   showDreamCircles: HTMLInputElement;
+  showColliders: HTMLInputElement;
+  colliderFields: HTMLElement;
+  colliderSaveStatus: HTMLElement;
+  colliderSaveButton: HTMLButtonElement;
 }
 
 const HELPER_HEIGHT_Y = 0.12;
@@ -190,6 +205,22 @@ function makeUi(root: HTMLElement): EditorUi {
         <span>Show dream circles</span>
       </label>
 
+      <details class="level-editor__advanced" id="level-editor-collider-details">
+        <summary>Collider presets (global)</summary>
+        <p class="level-editor__hint" style="margin:0.25rem 0 0.35rem; font-size:0.7rem; line-height:1.4;">
+          Per object type, not per level. Scales the collision box vs mesh (or trunk radius for trees). Live on the 3D preview.
+        </p>
+        <label class="level-editor__field level-editor__field--inline">
+          <input id="level-editor-show-colliders" type="checkbox" />
+          <span>Show collision wireframes</span>
+        </label>
+        <div id="level-editor-collider-fields" class="level-editor__collider-fields"></div>
+        <div class="level-editor__save-bar">
+          <div id="level-editor-collider-save-status" class="level-editor__save-status">All preset changes saved</div>
+          <button id="level-editor-collider-save" type="button" class="level-editor__save-button" disabled>Save presets</button>
+        </div>
+      </details>
+
       <details class="level-editor__advanced">
         <summary>Advanced</summary>
         <label class="level-editor__field">
@@ -236,6 +267,10 @@ function makeUi(root: HTMLElement): EditorUi {
     advancedImport: query('#level-editor-import'),
     advancedJson: query('#level-editor-json'),
     showDreamCircles: query('#level-editor-show-dream-circles'),
+    showColliders: query('#level-editor-show-colliders'),
+    colliderFields: query('#level-editor-collider-fields'),
+    colliderSaveStatus: query('#level-editor-collider-save-status'),
+    colliderSaveButton: query('#level-editor-collider-save'),
   };
 }
 
@@ -501,6 +536,9 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
   ui.showDreamCircles.checked = initialShowDreamCircles;
 
   const serverLoaded = await loadInitialDefinition();
+  clearColliderPresetsCache();
+  let workingPresets = cloneColliderPresets(await fetchColliderPresets());
+  let savedColliderSerialized = serializeColliderPresets(workingPresets);
   let definition = cloneLevelDefinition(serverLoaded);
   /** Baseline we compare against to know if the editor has unsaved changes. */
   let savedSerialized = serializeLevelDefinition(serverLoaded);
@@ -960,16 +998,122 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
   async function disposePreview(prev: PreviewState | null) {
     if (!prev) return;
     prev.billboardManager?.dispose();
+    scene.remove(prev.colliderWireGroup);
+    for (const c of prev.colliderWireGroup.children) {
+      const o = c as THREE.Mesh | THREE.Line;
+      o.geometry?.dispose();
+      const mat = o.material;
+      if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
+      else if (mat) (mat as THREE.Material).dispose();
+    }
+    prev.colliderWireGroup.clear();
     disposeObjectTree(prev.level.group);
+  }
+
+  function updateColliderSaveBar() {
+    const dirty = serializeColliderPresets(workingPresets) !== savedColliderSerialized;
+    ui.colliderSaveStatus.textContent = dirty
+      ? '• Unsaved collider changes'
+      : 'All collider changes saved';
+    ui.colliderSaveStatus.classList.toggle('level-editor__save-status--dirty', dirty);
+    ui.colliderSaveButton.disabled = !dirty;
+  }
+
+  function rebuildColliderWireGroup(ps: PreviewState) {
+    const g = ps.colliderWireGroup;
+    for (const c of g.children) {
+      const o = c as THREE.Mesh | THREE.Line;
+      o.geometry?.dispose();
+      const mat = o.material;
+      if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
+      else if (mat) (mat as THREE.Material).dispose();
+    }
+    g.clear();
+    g.visible = ui.showColliders.checked;
+    if (!g.visible) return;
+    const ringY = 0.1;
+    for (const ob of ps.level.obstacles) {
+      if (!ob.colliderTuning) continue;
+      if (ob.houseFootprint2D) {
+        const loopPts = houseFootprintWorldCornersXz(
+          ob.center.x,
+          ob.center.z,
+          ob.houseFootprint2D,
+        ).map(([x, z]) => new THREE.Vector3(x, ringY, z));
+        const geom = new THREE.BufferGeometry().setFromPoints(loopPts);
+        const line = new THREE.LineLoop(
+          geom,
+          new THREE.LineBasicMaterial({
+            color: 0x2ec4b6,
+            transparent: true,
+            opacity: 0.95,
+          }),
+        );
+        g.add(line);
+        continue;
+      }
+      const box = new THREE.BoxGeometry(ob.halfX * 2, ob.halfY * 2, ob.halfZ * 2);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0x2ec4b6,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.88,
+      });
+      const mesh = new THREE.Mesh(box, mat);
+      mesh.position.copy(ob.center);
+      g.add(mesh);
+    }
+  }
+
+  const onColliderLive = () => {
+    if (preview) {
+      reapplyAllColliderPresets(preview.level, workingPresets);
+      rebuildColliderWireGroup(preview);
+    }
+    updateColliderSaveBar();
+  };
+  mountColliderPresetForm(ui.colliderFields, workingPresets, onColliderLive);
+  updateColliderSaveBar();
+
+  async function saveColliderPresetsToServer() {
+    if (serializeColliderPresets(workingPresets) === savedColliderSerialized) return;
+    const body = serializeColliderPresets(workingPresets);
+    const endpoint = `${resolveServerHttpBase()}/dev/collider-presets`;
+    setStatus('Saving collider presets…');
+    ui.colliderSaveButton.disabled = true;
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`${res.status} ${res.statusText} ${text}`);
+      }
+      savedColliderSerialized = body;
+      updateColliderSaveBar();
+      setStatus('Saved to public/colliders/collider-presets.json');
+    } catch (err) {
+      console.error('[editor] collider preset save failed', err);
+      setStatus(
+        `Collider save failed — is the dev server on ${resolveServerHttpBase()}? See console.`,
+      );
+    } finally {
+      updateColliderSaveBar();
+    }
   }
 
   async function buildPreview(snapshot: LevelDefinition): Promise<PreviewState> {
     const level = createLevel(snapshot);
     await loadLevelTextures(level, renderer);
-    await loadLevelHouses(level);
-    await loadLevelTrees(level, DREAM_GOALS);
-    await loadLevelSceneryProps(level);
+    await loadLevelHouses(level, workingPresets);
+    await loadLevelTrees(level, DREAM_GOALS, workingPresets);
+    await loadLevelSceneryProps(level, workingPresets);
     scene.add(level.group);
+    const colliderWireGroup = new THREE.Group();
+    colliderWireGroup.name = 'level-editor-collider-wires';
+    scene.add(colliderWireGroup);
     const billboardModel = await billboardModelPromise;
     const placements = buildBillboardPlacements(
       snapshot,
@@ -978,6 +1122,7 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
       EXAMPLE_TWEETS,
       { x: level.spawn.x, z: level.spawn.z },
     );
+    level.addObstacles(buildBillboardCollisionObstacles(billboardModel, placements, workingPresets));
     const billboardManager = createTweetBillboards({
       scene,
       camera,
@@ -986,7 +1131,7 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
       placements,
       interactive: false,
     });
-    return { level, billboardManager };
+    return { level, billboardManager, colliderWireGroup };
   }
 
   async function requestPreviewBuild() {
@@ -1016,6 +1161,10 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
       const oldPreview = preview;
       preview = nextPreview;
       await disposePreview(oldPreview);
+      if (preview) {
+        reapplyAllColliderPresets(preview.level, workingPresets);
+        rebuildColliderWireGroup(preview);
+      }
       break;
     }
 
@@ -1225,6 +1374,13 @@ export async function bootLevelEditor(canvas: HTMLCanvasElement): Promise<void> 
       // Private-mode or quota errors are non-fatal — the toggle still
       // works for the current session, just doesn't persist.
     }
+  });
+
+  ui.showColliders.addEventListener('change', () => {
+    if (preview) rebuildColliderWireGroup(preview);
+  });
+  ui.colliderSaveButton.addEventListener('click', () => {
+    void saveColliderPresetsToServer();
   });
 
   ui.advancedAutoBillboards.addEventListener('click', autoGenerateBillboards);
