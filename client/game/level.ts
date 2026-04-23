@@ -200,6 +200,84 @@ function fbmNoise2D(x: number, z: number, octaves: number): number {
   return weight > 0 ? total / weight : 0;
 }
 
+/**
+ * World-space ground height (Y) at `(worldX, worldZ)` for the same relief
+ * as `sculptGroundReliefAroundPlaySpace`, parameterised from a
+ * `LevelDefinition`.
+ */
+export function sampleGroundHeightY(
+  worldX: number,
+  worldZ: number,
+  definition: LevelDefinition,
+): number {
+  const { groundSize, worldBoundary } = definition;
+  return groundReliefHeightAt(
+    worldX,
+    worldZ,
+    groundSize,
+    worldBoundary.centerX,
+    worldBoundary.centerZ,
+    worldBoundary.radius,
+  );
+}
+
+function groundReliefHeightAt(
+  worldX: number,
+  worldZ: number,
+  groundSize: number,
+  playableCenterX: number,
+  playableCenterZ: number,
+  playableRadius: number,
+): number {
+  const half = groundSize * 0.5;
+
+  const flatGuardStart = playableRadius + 70;
+  const ridgePeakRadius = Math.min(playableRadius + 285, half - 120);
+  const ridgeFadeRadius = Math.min(half - 50, ridgePeakRadius + 140);
+
+  const baseRidgeHeight = 18;
+  const peakAmp = 14;
+  const detailAmp = 6;
+  const valleyDepth = 9;
+  const angularPeakFreq = 10;
+  const angularWobbleFreq = 3;
+
+  const dx = worldX - playableCenterX;
+  const dz = worldZ - playableCenterZ;
+  const dist = Math.hypot(dx, dz);
+
+  if (dist <= flatGuardStart || dist >= ridgeFadeRadius) {
+    return 0;
+  }
+
+  const rise = smoothstep(flatGuardStart, ridgePeakRadius, dist);
+  const fall = 1 - smoothstep(ridgePeakRadius, ridgeFadeRadius, dist);
+  const radialMask = rise * fall;
+  if (radialMask <= 0) {
+    return 0;
+  }
+
+  const theta = Math.atan2(dz, dx);
+  const peakWave =
+    Math.cos(theta * angularPeakFreq + Math.sin(theta * angularWobbleFreq) * 0.9) * 0.5 + 0.5;
+
+  const angularSampleRadius = 80;
+  const ax = Math.cos(theta) * angularSampleRadius;
+  const az = Math.sin(theta) * angularSampleRadius;
+  const angularLumps = (fbmNoise2D(ax * 0.035, az * 0.035, 3) + 1) * 0.5;
+
+  const peakShape = peakWave * 0.7 + angularLumps * 0.3;
+  const ridgeField = 1 - Math.abs(fbmNoise2D((worldX + 123.4) * 0.018, (worldZ - 67.8) * 0.022, 4));
+  const ridgeDetail = ridgeField * ridgeField;
+  const valley = Math.max(0, 0.38 - peakShape) * valleyDepth;
+
+  return Math.max(
+    0,
+    radialMask *
+      (baseRidgeHeight + peakAmp * peakShape + detailAmp * ridgeDetail - valley),
+  );
+}
+
 function sculptGroundReliefAroundPlaySpace(
   geometry: THREE.PlaneGeometry,
   groundSize: number,
@@ -209,78 +287,14 @@ function sculptGroundReliefAroundPlaySpace(
 ): void {
   const pos = geometry.attributes.position as THREE.BufferAttribute | undefined;
   if (!pos) return;
-  const half = groundSize * 0.5;
-
-  // Radial profile. The play area is flat; beyond a guard band the ground
-  // rises into a ridge and tapers back down before the geometric border so
-  // the mountain silhouette never clips against the skybox edge.
-  const flatGuardStart = playableRadius + 70;
-  const ridgePeakRadius = Math.min(playableRadius + 285, half - 120);
-  const ridgeFadeRadius = Math.min(half - 50, ridgePeakRadius + 140);
-
-  // Height budget (metres above the flat meadow).
-  const baseRidgeHeight = 18;
-  const peakAmp = 14; // low-frequency peaks/valleys around the ring
-  const detailAmp = 6; // high-frequency ridge noise on top
-  const valleyDepth = 9; // how far the gaps between peaks dip
-
-  // Around the horizon we want roughly 8–12 major peaks. Using a
-  // cos(freq * theta) modulated by another sine creates an uneven, natural
-  // cadence instead of a perfectly periodic wave.
-  const angularPeakFreq = 10;
-  const angularWobbleFreq = 3;
 
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
     const z = -pos.getY(i);
-    const dx = x - playableCenterX;
-    const dz = z - playableCenterZ;
-    const dist = Math.hypot(dx, dz);
-
-    if (dist <= flatGuardStart || dist >= ridgeFadeRadius) {
-      pos.setZ(i, 0);
-      continue;
-    }
-
-    // Radial mask: 0 at the guard, 1 at the ridge peak, back to 0 at fade.
-    const rise = smoothstep(flatGuardStart, ridgePeakRadius, dist);
-    const fall = 1 - smoothstep(ridgePeakRadius, ridgeFadeRadius, dist);
-    const radialMask = rise * fall;
-    if (radialMask <= 0) {
-      pos.setZ(i, 0);
-      continue;
-    }
-
-    const theta = Math.atan2(dz, dx);
-
-    // Main ring cadence: ~10 peaks modulated by a slower wobble so they are
-    // not evenly spaced. Mapped into [0,1] so it reads as a height factor.
-    const peakWave =
-      Math.cos(theta * angularPeakFreq + Math.sin(theta * angularWobbleFreq) * 0.9) * 0.5 + 0.5;
-
-    // Periodic angular noise: sampling fbm on a small circle keeps the
-    // pattern continuous across theta = ±π.
-    const angularSampleRadius = 80;
-    const ax = Math.cos(theta) * angularSampleRadius;
-    const az = Math.sin(theta) * angularSampleRadius;
-    const angularLumps = (fbmNoise2D(ax * 0.035, az * 0.035, 3) + 1) * 0.5;
-
-    // Soft blend of both so no two peaks are exactly the same height.
-    const peakShape = peakWave * 0.7 + angularLumps * 0.3;
-
-    // Sharper crests from high-frequency ridge noise on world coords, so
-    // the detail does not "rotate" with theta and looks like real terrain.
-    const ridgeField = 1 - Math.abs(fbmNoise2D((x + 123.4) * 0.018, (z - 67.8) * 0.022, 4));
-    const ridgeDetail = ridgeField * ridgeField;
-
-    // Pull the valleys between major peaks a little lower than the base ridge.
-    const valley = Math.max(0, 0.38 - peakShape) * valleyDepth;
-
-    const height =
-      radialMask *
-      (baseRidgeHeight + peakAmp * peakShape + detailAmp * ridgeDetail - valley);
-
-    pos.setZ(i, Math.max(0, height));
+    pos.setZ(
+      i,
+      groundReliefHeightAt(x, z, groundSize, playableCenterX, playableCenterZ, playableRadius),
+    );
   }
 
   pos.needsUpdate = true;
@@ -560,6 +574,7 @@ export async function loadLevelTextures(
   ]);
 
   grass.setPlaneSize(level.definition.groundSize, level.definition.groundSize);
+  applyGrassMacroVariation(grass.material);
   const oldGround = level.ground.material as THREE.Material;
   level.ground.material = grass.material;
   oldGround.dispose();
@@ -593,6 +608,117 @@ export async function loadLevelTextures(
     pp.mesh.material = mat;
     oldPp.dispose();
   }
+}
+
+/**
+ * Inject macro colour variation into the grass `MeshStandardMaterial` so
+ * the meadow doesn't read as one flat tone with a visible 5 m tile
+ * repeat. We hook `onBeforeCompile` and add a few GLSL lines that:
+ *
+ *   - Pipe `vGrassWorldPos` (world-space XZ of each fragment) from the
+ *     vertex shader so the noise is stable in world space (not screen
+ *     space, not UV space — otherwise the variation would smear when the
+ *     player moves).
+ *   - Sample a 2-octave value-noise FBM at two frequencies:
+ *       macro (~17 m period) → brightness bands mimicking "sunny vs.
+ *         shaded" meadow patches. This is what hides the texture repeat.
+ *       meso (~4.5 m period) → subtle hue shifts between a warmer-green
+ *         and a cooler-yellow-green so adjacent tiles aren't identical.
+ *   - Gently saturation-boost the final albedo so the meadow reads
+ *     closer to the stylised reference without going cartoon-flat.
+ *
+ * Everything lives inside the existing PBR pipeline (we only modify
+ * `diffuseColor` before lighting), so the normal map, shadows, and HDRI
+ * IBL all keep working.
+ */
+function applyGrassMacroVariation(material: THREE.MeshStandardMaterial): void {
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        /* glsl */ `
+          #include <common>
+          varying vec3 vGrassWorldPos;
+        `,
+      )
+      .replace(
+        '#include <begin_vertex>',
+        /* glsl */ `
+          #include <begin_vertex>
+          vGrassWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        `,
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        /* glsl */ `
+          #include <common>
+          varying vec3 vGrassWorldPos;
+
+          float grassHash(vec2 p) {
+            return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+          }
+          // Value noise with cubic smoothstep interpolation — cheap and
+          // smooth, which is what we want for low-frequency tinting.
+          float grassNoise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            vec2 u = f * f * (3.0 - 2.0 * f);
+            return mix(
+              mix(grassHash(i + vec2(0.0, 0.0)), grassHash(i + vec2(1.0, 0.0)), u.x),
+              mix(grassHash(i + vec2(0.0, 1.0)), grassHash(i + vec2(1.0, 1.0)), u.x),
+              u.y
+            );
+          }
+          float grassFbm(vec2 p) {
+            float v = 0.0;
+            float a = 0.5;
+            for (int oct = 0; oct < 3; oct++) {
+              v += a * grassNoise(p);
+              p *= 2.03;
+              a *= 0.5;
+            }
+            return v;
+          }
+        `,
+      )
+      .replace(
+        '#include <map_fragment>',
+        /* glsl */ `
+          #include <map_fragment>
+          {
+            vec2 mp = vGrassWorldPos.xz;
+
+            // Low freq (~17 m period) for big patches, higher freq
+            // (~4.5 m) for finer hue mottling. Offset the second so the
+            // two fields don't align and create banding.
+            float macro = grassFbm(mp * 0.06);
+            float meso  = grassFbm(mp * 0.22 + 17.3);
+
+            // Brightness modulation: darker in dips, brighter in highs.
+            // Range chosen by eye — strong enough to mask tiling, mild
+            // enough to not look blotchy under direct sunlight.
+            float brightness = mix(0.92, 3.15, macro);
+
+            // Tint swings between a slightly-warm cool-green and a more
+            // yellow-green, pulled toward the reference palette.
+            vec3 cool = vec3(0.82, 1.00, 0.68);
+            vec3 warm = vec3(1.10, 1.12, 0.68);
+            vec3 tint = mix(cool, warm, meso);
+
+            diffuseColor.rgb *= brightness * tint;
+
+            // Saturation boost (mix away from luminance).
+            float lum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+            diffuseColor.rgb = mix(vec3(lum), diffuseColor.rgb, 1.25);
+          }
+        `,
+      );
+  };
+  // Ensure the patched shader actually gets compiled rather than a
+  // cached unpatched version if this material had been touched before.
+  material.needsUpdate = true;
 }
 
 function makeBox(

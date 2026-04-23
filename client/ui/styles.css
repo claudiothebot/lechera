@@ -2218,10 +2218,104 @@ body.editor-active .level-editor-root {
     left: max(0.5rem, env(safe-area-inset-left));
   }
 
+  /*
+   * Compact mobile layout: the goal is to keep the entire card inside
+   * the upper band of the viewport so it never overlaps the left
+   * joystick zone (pinned to the bottom, 48vh tall). With the
+   * adjustments below the card fits in ~170 px of height on a 390 px
+   * landscape viewport, leaving clean separation between HUD and the
+   * thumb stick.
+   *
+   * We also drop the "Delivered" row on mobile (same rationale as the
+   * dream preview on the right — it's flavor; the ranking overlay has
+   * the cumulative totals). `pointer-events: auto` is defence-in-depth
+   * so any taps that do land on the card absorb cleanly instead of
+   * leaking through `#hud`'s `pointer-events: none`.
+   */
   .hud-left-card {
-    padding: 0.55rem 0.65rem 0.65rem;
-    max-width: 10.5rem;
-    gap: 0.9rem;
+    padding: 0.4rem 0.55rem 0.5rem;
+    max-width: 9.5rem;
+    gap: 0.45rem;
+    pointer-events: auto;
+  }
+
+  #hud-time-block .hud-value {
+    font-size: 1.3rem;
+  }
+
+  /*
+   * Carrying + Delivered side-by-side instead of stacked. Two columns
+   * fit comfortably inside the narrower card, and users keep both
+   * numbers visible without the vertical space cost of the desktop
+   * column layout. Icons are sized in `em` so they scale down with the
+   * smaller `hud-milk-amount` font-size automatically.
+   */
+  .hud-milk-stack {
+    flex-direction: row;
+    justify-content: space-around;
+    align-items: flex-start;
+    gap: 0.4rem;
+  }
+
+  .hud-milk-row {
+    flex: 0 1 auto;
+  }
+
+  .hud-milk-row__meta .hud-label {
+    font-size: 0.52rem;
+    letter-spacing: 0.08em;
+  }
+
+  .hud-milk-amount {
+    font-size: 0.95rem;
+    gap: 0.22rem;
+  }
+
+  .hud-actions {
+    gap: 0.25rem;
+    margin-top: -0.15rem;
+  }
+
+  .hud-action {
+    padding: 0.28rem 0.45rem;
+    font-size: 0.6rem;
+  }
+
+  /*
+   * Balance bar — strip the desktop "card" chrome on mobile. The
+   * visible bar + a small centered label/value below it is enough:
+   * the backdrop-blur panel competes with gameplay for attention on a
+   * phone, and the balance percentage is already redundant with the
+   * bar fill.
+   */
+  #hud-balance-center {
+    top: max(0.5rem, env(safe-area-inset-top));
+    width: min(60vw, 380px);
+  }
+
+  .hud-balance-chrome {
+    padding: 0;
+    border: none;
+    background: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
+  }
+
+  #balance-bar-track {
+    height: 8px;
+  }
+
+  #balance-bar-footer {
+    justify-content: center;
+    gap: 0.5rem;
+    margin-top: 0.3rem;
+  }
+
+  #balance-label,
+  #spill-value {
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
   }
 
   /*
