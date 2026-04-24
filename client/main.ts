@@ -30,12 +30,17 @@ import {
 } from './game/jugModel';
 import { loadLevelAnimals, type LevelAnimals } from './game/levelAnimals';
 import { createHorizonBackdrop } from './game/horizonBackdrop';
+import {
+  cameFromVibeJamPortal,
+  createVibeJamPortals,
+  type VibeJamPortals,
+} from './game/vibeJamPortal';
 import { loadBillboardModel } from './game/billboardModel';
 import {
   buildBillboardCollisionObstacles,
   createTweetBillboards,
 } from './game/tweetBillboards';
-import { DREAM_GOALS } from '@milk-dreams/shared';
+import { DREAM_GOALS, sanitiseName } from '@milk-dreams/shared';
 import { createProgression, rewardEmojiForDreamIndex } from './game/progression';
 import { createCameraRig } from './render/cameraRig';
 import { installHdriSky } from './render/sky';
@@ -59,7 +64,11 @@ import {
 } from './net/leaderboard';
 import { loadBillboardTweets } from './net/tweets';
 import type { AllTimeEntry, ProclamationView, ScoreboardEntry } from './ui/hud';
-import { getOrAskPlayerName, persistSanitisedPlayerName } from './ui/nameModal';
+import {
+  getOrAskPlayerName,
+  getPlayerDisplayNameFromCache,
+  persistSanitisedPlayerName,
+} from './ui/nameModal';
 import {
   initFirstRunCoach,
   updateFirstRunCoach,
@@ -73,6 +82,19 @@ import { fetchColliderPresets } from './game/colliderPresets';
 function countryForNetBadge(self: RemotePlayerView | null): string | null {
   const c = self?.country?.trim();
   return c ? c : null;
+}
+
+function hexColorFromHue(hue: number | null | undefined): string | null {
+  if (hue === null || hue === undefined || !Number.isFinite(hue)) return null;
+  const color = new THREE.Color().setHSL((((hue % 360) + 360) % 360) / 360, 0.72, 0.56);
+  return `#${color.getHexString()}`;
+}
+
+function seedPortalPlayerName(): void {
+  if (!cameFromVibeJamPortal()) return;
+  const params = new URLSearchParams(window.location.search);
+  const fromPortal = sanitiseName(params.get('username') ?? '') ?? 'Traveler';
+  persistSanitisedPlayerName(fromPortal);
 }
 
 /** Body height the lechera GLB is scaled to (match Meshy resize export, metres). */
@@ -341,6 +363,7 @@ async function boot() {
   const cameraRig = createCameraRig(camera);
   const balance = createJugBalance({ invincible: DEBUG_INVINCIBLE });
   const input = createInputSystem(canvas);
+  let vibeJamPortals: VibeJamPortals | null = null;
   // `createHud` is invoked up-front so subsequent bootstrap calls (e.g.
   // `setDebugInvincible`, `setRound`) have an HUD to talk to. The click
   // callbacks close over `let` bindings declared further down (`multi`,
@@ -552,6 +575,17 @@ async function boot() {
       }
     })();
   }
+
+  vibeJamPortals = createVibeJamPortals({
+    scene,
+    camera,
+    getPlayerObject: () => player.group,
+    getPlayerName: () => multi.selfName() ?? getPlayerDisplayNameFromCache(),
+    getPlayerColor: () => hexColorFromHue(multi.selfView()?.colorHue),
+    getPlayerSpeed: () => player.result.speed,
+    spawnPoint: { x: level.spawn.x + 3.2, z: level.spawn.z + 1.4 },
+    exitPosition: { x: level.spawn.x - 5.6, z: level.spawn.z + 0.6 },
+  });
 
   const tiltAxis = new THREE.Vector3();
   const jugWorldPos = new THREE.Vector3();
@@ -998,6 +1032,7 @@ async function boot() {
     void reconnectWithNewName(sanitised);
   };
 
+  seedPortalPlayerName();
   void getOrAskPlayerName().then((chosenName) =>
     connectMultiplayer({
       name: chosenName,
@@ -1406,6 +1441,7 @@ async function boot() {
       yaw: player.result.facing,
     });
     remotePlayers?.update(dt);
+    vibeJamPortals?.update(dt);
 
     // Minimap reflects whatever state we ended this frame in (playing or
     // frozen), so the radar is still informative on game-over screens.
