@@ -15,6 +15,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MilkDreamsRoom } from './rooms/MilkDreamsRoom.js';
 import { getLeaderboardStore } from './persistence/supabase.js';
+import { getTweetsStore } from './persistence/tweets.js';
 
 const PORT = Number(process.env.PORT ?? 2567);
 const HOST = process.env.HOST ?? '127.0.0.1';
@@ -76,6 +77,24 @@ app.get('/leaderboard', async (req, res) => {
       `[server] /leaderboard handler error: ${(err as Error).message}`,
     );
     res.json({ entries: [] });
+  }
+});
+
+/**
+ * Public billboard tweets for the in-world signs. The ingest service owns
+ * fetching/storing raw tweets; this endpoint exposes only the curated,
+ * billboard-safe fields returned by the `milk_dreams.billboard_tweets()`
+ * RPC, with server-side text cleanup before JSON leaves this process.
+ */
+app.get('/tweets', async (_req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const tweets = await getTweetsStore().billboardTweets();
+    res.json({ tweets });
+  } catch (err) {
+    console.warn(`[server] /tweets handler error: ${(err as Error).message}`);
+    res.json({ tweets: [] });
   }
 });
 

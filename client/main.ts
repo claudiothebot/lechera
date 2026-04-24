@@ -35,7 +35,6 @@ import {
   buildBillboardCollisionObstacles,
   createTweetBillboards,
 } from './game/tweetBillboards';
-import { EXAMPLE_TWEETS } from './game/exampleTweets';
 import { DREAM_GOALS } from '@milk-dreams/shared';
 import { createProgression, rewardEmojiForDreamIndex } from './game/progression';
 import { createCameraRig } from './render/cameraRig';
@@ -58,6 +57,7 @@ import {
   httpEndpointFromWs,
   type LeaderboardEntry,
 } from './net/leaderboard';
+import { loadBillboardTweets } from './net/tweets';
 import type { AllTimeEntry, ProclamationView, ScoreboardEntry } from './ui/hud';
 import { getOrAskPlayerName, persistSanitisedPlayerName } from './ui/nameModal';
 import {
@@ -526,12 +526,15 @@ async function boot() {
       }
 
       try {
-        const billboardModel = await loadBillboardModel();
+        const [billboardModel, tweets] = await Promise.all([
+          loadBillboardModel(),
+          loadBillboardTweets(),
+        ]);
         const placements = buildBillboardPlacements(
           level.definition,
           level.obstacles,
           DREAM_GOALS,
-          EXAMPLE_TWEETS,
+          tweets,
           { x: level.spawn.x, z: level.spawn.z },
         );
         level.addObstacles(
