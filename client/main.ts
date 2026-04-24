@@ -576,15 +576,17 @@ async function boot() {
     })();
   }
 
-  vibeJamPortals = createVibeJamPortals({
-    scene,
-    camera,
-    getPlayerObject: () => player.group,
-    getPlayerName: () => multi.selfName() ?? getPlayerDisplayNameFromCache(),
-    getPlayerColor: () => hexColorFromHue(multi.selfView()?.colorHue),
-    getPlayerSpeed: () => player.result.speed,
-    spawnPoint: { x: level.spawn.x + 3.2, z: level.spawn.z + 1.4 },
-    exitPosition: { x: level.spawn.x - 5.6, z: level.spawn.z + 0.6 },
+  requestAnimationFrame(() => {
+    vibeJamPortals = createVibeJamPortals({
+      scene,
+      camera,
+      getPlayerObject: () => player.group,
+      getPlayerName: () => multi.selfName() ?? getPlayerDisplayNameFromCache(),
+      getPlayerColor: () => hexColorFromHue(multi.selfView()?.colorHue),
+      getPlayerSpeed: () => player.result.speed,
+      spawnPoint: { x: level.spawn.x + 3.2, z: level.spawn.z + 1.4 },
+      exitPosition: { x: level.spawn.x - 4.8, z: level.spawn.z - 5.2 },
+    });
   });
 
   const tiltAxis = new THREE.Vector3();
