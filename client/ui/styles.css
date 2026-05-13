@@ -277,6 +277,9 @@ body {
 }
 
 .hud-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
   min-width: 0;
   width: 100%;
@@ -307,6 +310,10 @@ body {
   background: rgba(241, 210, 141, 0.16);
   border-color: rgba(241, 210, 141, 0.55);
   color: var(--accent);
+}
+
+.hud-action--link {
+  text-decoration: none;
 }
 
 .hud-action:active {
